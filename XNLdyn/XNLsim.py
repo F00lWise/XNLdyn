@@ -1,7 +1,10 @@
 import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
 import numpy as np
+
 # Import all the parameters defined in the params file and processed in process_params
 from .params import *
+from .utility import plot_results
 
 DEBUG = False
 class PhysicsError(RuntimeError):
@@ -10,16 +13,20 @@ class PhysicsError(RuntimeError):
         super().__init__(self.message)
 
 
-def check_bounds(value, min = 0, max = 1.0):
+def check_bounds(value, min = 0, max = 1.0, raise_error = False):
     if np.any(value < min):
-        print(f'Found value up to {np.min(value[value < min])-min} under minimum of {min}.')
+        string = f'Found value up to {np.min(value[value < min])-min} under minimum of {min}.'
+        if raise_error:
+            raise PhysicsError(string)
+        else:
+            print(string)
     if np.any(value > max):
-        print(f'Found values {np.max(value[value > max])-max} over maximum of {max}.')
+        string = f'Found values {np.max(value[value > max])-max} over maximum of {max}.'
+        if raise_error:
+            raise PhysicsError(string)
+        else:
+            print(string)
 
-        if np.max(value[value > max])-max > 1:
-            print('breakpoint')
-        #print(f'Found {value}, but only {min} to {max} should make sense.')
-        #raise PhysicsError(f'Found {value}, but only {min} to {max} should make sense.')
 
 class XNLpars:
     def __init__(self):
@@ -105,7 +112,7 @@ class XNLpars:
                                            *self.rho_Ej_0] * self.Nsteps_z).reshape(self.Nsteps_z,
                                                                                     self.states_per_voxel)
 
-        print('Initiated simulation parameters.\n Number of tracked parameters: ', np.size(self.state_vector_0))
+        #print('Initiated simulation parameters.\n Number of tracked parameters: ', np.size(self.state_vector_0))
 
     def get_resonant_states(self, E, resonant_width, npoints=10):
         """
@@ -162,7 +169,39 @@ class XNLsim:
     Processes
     """
 
-    # f(T,i)
+
+    def run(self, t_span, method, rtol, atol, plot = False):
+        """
+        Run the simulation once for a z-stack
+
+        :param t_span: Time axis to simulate within, limits in femtoseconds
+        :param method: Use 'RK45' for or 'DOP853' (tha latter for very small error goals)
+        :param rtol: Relative error goal
+        :param atol: Absolute error goal
+        :param plot: Boolean to plot results
+        :return: incident_pulse_energies, transmitted_pulse_energies
+        """
+        ### Solve Main problem
+        sol = solve_ivp(self.time_derivative, t_span=t_span, \
+                        dense_output=True, y0=self.par.state_vector_0.flatten(), method=method, rtol=rtol,
+                        atol=atol)  # DOP853 or RK45
+
+        soly = sol.y.reshape((self.par.Nsteps_z, self.par.states_per_voxel, len(sol.t)))
+
+        ### Since they weren't saved, calculate transmission again
+        sol_photon_densities = np.zeros((self.par.Nsteps_z, self.par.N_photens, len(sol.t)))
+        for it, t in enumerate(sol.t):
+            sol_photon_densities[:, :, it] = self.z_dependence(t, soly[:, :, it])
+
+        incident_pulse_energies = np.trapz(sol_photon_densities[0, :, :], x=sol.t)
+        transmitted_pulse_energies = np.trapz(sol_photon_densities[-1, :, :], x=sol.t)
+
+        if plot:
+            plot_results(self.par, sol, sol_photon_densities)
+
+        return incident_pulse_energies, transmitted_pulse_energies
+
+    # Calcf(T,i)
     def fermi(self, T, rho_VB, E_j, E_f, j=np.s_[:]):
         valence_occupation = (rho_VB / self.par.M_VB)
 
@@ -177,7 +216,6 @@ class XNLsim:
             check_bounds(valence_occupation)
             check_bounds(fermi_distr)
         return valence_occupation * self.par.M_Ej[j] * fermi_distr
-
     def calc_thermal_occupations(self, state_vector):
         """
         It appears favorable to do this separately at the beginning of the call
