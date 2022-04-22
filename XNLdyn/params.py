@@ -1,4 +1,4 @@
-Nsteps_z = 15     # Steps in Z
+Nsteps_z = 25     # Steps in Z
 N_photens= 1      # Number of distict resonant photon energies
 
 
@@ -24,10 +24,10 @@ lambda_nonres = 500    # Absorption length of non-resonant photons, assumed equa
 
 
 ## Fermi Energy
-E_f = 850 #eV
+E_f = 850.7 #eV
 
 ## Incident photon profile
-I0       = [7,]   # Pulse energy density in photons per nm²
+I0       = [1,]   # Pulse energy density in photons per nm²
 t0       = [0,]   # Arrival time on time-axis / fs
-tdur_sig = [7,]   # Rms pulse duration / fs
-E_j      = [849,] # Photon Energies of incident pulses / eV
+tdur_sig = [10,]   # Rms pulse duration / fs
+E_j      = [855,] # Photon Energies of incident pulses / eV

@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-
+import XNLdyn
 
 def run_modified_simulation(PAR, sim_options, changed_parameters, new_values):
     print(f'Initializing a simulation where {changed_parameters} are changed to {new_values}\n')
@@ -14,8 +14,8 @@ def run_modified_simulation(PAR, sim_options, changed_parameters, new_values):
 
     # run it!
     incident, transmitted = sim.run(**sim_options)
-    print('Incident: ', incident)
-    print('Transmitted: ', transmitted)
+    #print('Incident: ', incident)
+    #print('Transmitted: ', transmitted)
     print('Transmission: ', 100 * transmitted/incident, ' %')
     return incident, transmitted
 
@@ -55,14 +55,19 @@ def spotgauss(r, sigma):
     return 1/sigma**2 * np.exp(-(r**2)/(2*sigma**2))
 
 def calculate_fluences(Nsteps_r, pulse_energy_max, pulse_profile_sigma):
-
+    """
+    :param Nsteps_r: Number
+    :param pulse_energy_max: Joule
+    :param pulse_profile_sigma: pulse_profile_sigma
+    """
     r_centers, dr, dA = make_integration_axis(Nsteps_r, pulse_profile_sigma)
-    fluences_J_um2 = pulse_energy_max * spotgauss(r_centers, pulse_profile_sigma)*dA
-    fluences_J_nm2 = fluences_J_um2/1e6
-    fluences_eV_nm2 = fluences_J_nm2/PAR.echarge
-    fluences_photons_nm2 = fluences_eV_nm2/850 # change to par_Ej when I make this vectorized
+    
+    fluences_phot_nm2 = pulse_energy_max * spotgauss(r_centers, pulse_profile_sigma)
+    return fluences_phot_nm2, dA
 
-    return fluences_photons_nm2, dA
+def photons_per_J(photon_energy):
+    echarge = 1.602176634e-19 #J/eV
+    return 1/(photon_energy*echarge)
 
 def plot_results(PAR, sol, sol_photon_densities):
     ## Plotting

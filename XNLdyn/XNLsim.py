@@ -55,7 +55,7 @@ class XNLpars:
         self.tau_CH = tau_CH
         self.tau_free = tau_free
         self.tau_therm = tau_therm
-        self.lambda_res_Ej = lambda_res_Ej
+        self.lambda_res_Ej = np.array(lambda_res_Ej)
         self.lambda_nonres = lambda_nonres
 
         ## Fermi Energy
@@ -66,11 +66,19 @@ class XNLpars:
         self.t0 = np.array(t0)
         self.tdur_sig = np.array(tdur_sig)
         self.E_j = np.array(E_j)
+        
 
         assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_j) == len(lambda_res_Ej)), \
             'Make sure all photon pulses get all parameters!'
 
     def make_derived_params(self, sim):
+        ## Just making sure these are arrays (not tuples or lists or whatever)
+        self.lambda_res_Ej = np.array(self.lambda_res_Ej)
+        self.I0 = np.array(self.I0)
+        self.t0 = np.array(self.t0)
+        self.tdur_sig = np.array(self.tdur_sig)
+        self.E_j = np.array(self.E_j)
+        
         ## now some derived quantities
         self.zstepsize = self.Z / self.Nsteps_z
         self.zaxis = np.arange(0, self.Z, self.zstepsize)
@@ -165,10 +173,10 @@ class XNLsim:
         self.call_counter = 0
         self.thermal_occupations = None
 
+        
     """
     Processes
     """
-
 
     def run(self, t_span, method, rtol, atol, plot = False):
         """
@@ -384,6 +392,8 @@ class XNLsim:
         # Reshape the state vector into sensible dimension
         state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
         check_bounds(state_vector[:, 3], 0, np.inf) # The temperature must never become negative
+        state_vector[:, 3][state_vector[:, 3]<0] = 0 # Dirty fix since this seems to happen! Look into!
+        
         self.thermal_occupations = self.calc_thermal_occupations(state_vector)
 
         # Initiate empty variables
