@@ -425,7 +425,7 @@ class XNLsim:
             *self.rate_E_j(res_inter, el_therm)])  # .reshape()
         """
         # Debug plotting
-        if True:#self.intermediate_plots:
+        if self.intermediate_plots:
             if np.mod(self.call_counter,20)==0:
                 self.plot_z_dependence(N_Ej_z)
                 self.plot_occupancies(state_vector)
