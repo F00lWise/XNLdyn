@@ -75,19 +75,21 @@ class XNLpars:
 
         self.states_per_voxel = 5 + self.N_photens  # Just the number of entries for later convenience
 
-        # Load DoD data
-        ld = np.load(self.DoS_shapefile)
-        self.DoSdata = {}
-        self.DoSdata['x'] = ld[:, 0]
-        self.DoSdata['y'] = ld[:, 1]
-        self.DoSdata['osi'] = np.array([np.trapz(self.DoSdata['y'][:i], x=self.DoSdata['x'][:i]) for i in range(
-            len(self.DoSdata['x']))])  # one-sided integral for calculating Fermi energy
-
         ## Multiplicities - these are global for all t and z
         self.M_CE = self.atomic_density * self.core_states
         self.M_VB = self.atomic_density * self.total_valence_states
         self.M_Ej = np.array([self.M_VB * self.get_resonant_states(self.E_j[j] - self.E_f, self.photon_bandwidth) \
                               for j in range(self.N_photens)])
+
+        # Load DoS data
+        ld = np.load(self.DoS_shapefile)
+        self.DoSdata = {}
+        self.DoSdata['x'] = ld[:, 0]
+        self.DoSdata['y_atomar'] = ld[:, 1]
+        self.DoSdata['y'] = self.DoSdata['y_atomar'] * self.M_VB
+        self.DoSdata['osi'] = np.array([np.trapz(self.DoSdata['y'][:i], x=self.DoSdata['x'][:i]) for i in range(
+            len(self.DoSdata['x']))])  # one-sided integral for calculating Fermi energy
+
 
         ## Initial populations
         self.rho_core_0 = self.M_CE  # Initially fully occupied
@@ -209,7 +211,7 @@ class XNLsim:
     # Calcf(T,i)
     def fermi(self, T, rho_VB, E_j, E_f, j=np.s_[:]):
         global DEBUG
-        valence_occupation = (rho_VB / self.par.M_VB)
+        valence_occupation = (rho_VB / self.par.rho_VB_0)
 
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
         fermi_distr = np.zeros(E_j.shape)
@@ -221,7 +223,7 @@ class XNLsim:
         if self.DEBUG:
             check_bounds(valence_occupation, message='Valence occupation in fermi()')
             check_bounds(fermi_distr, message='Fermi distribution in fermi()')
-        return valence_occupation * self.par.M_Ej[j] * fermi_distr
+        return valence_occupation * fermi_distr #* self.par.M_Ej[j]
     
     def calc_thermal_occupations(self, state_vector):
         """
@@ -415,15 +417,6 @@ class XNLsim:
         derivatives[:, 4] = self.rate_E_free(nonres_inter, ch_decay, el_scatt, mean_free, mean_valence)
         derivatives[:, 5:] = self.rate_E_j(res_inter, el_therm)
 
-        """
-        derivatives[:] = np.concatenate([
-            self.rate_CE(res_inter, ch_decay),
-            self.rate_free(nonres_inter, ch_decay, el_scatt),
-            self.rate_VB(res_inter, nonres_inter, el_therm, ch_decay, el_scatt),
-            self.rate_T(el_therm, el_scatt, mean_free, mean_valence),
-            self.rate_E_free(nonres_inter, ch_decay, el_scatt, mean_free, mean_valence),
-            *self.rate_E_j(res_inter, el_therm)])  # .reshape()
-        """
         # Debug plotting
         if self.intermediate_plots:
             if np.mod(self.call_counter,20)==0:
