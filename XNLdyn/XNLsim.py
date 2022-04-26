@@ -9,10 +9,10 @@ from .params import *
 
 def check_bounds(value, min=0, max=1., message=''):
     if np.any(value < min):
-        string = f'Found value up to {np.min(value[value < min])-min:.3f} under minimum of {min}.' + message
+        string = f'Found value up to {np.min(value[value < min])-min:.3e} under minimum of {min}.' + message
         warnings.warn(string)
     if np.any(value > max):
-        string = f'Found values {np.max(value[value > max])-max:.3f} over maximum of {max}.' + message
+        string = f'Found values {np.max(value[value > max])-max:.3e} over maximum of {max}.' + message
         warnings.warn(string)
 
 
@@ -216,8 +216,8 @@ class XNLsim:
         energy_ratios = (E_j - E_f) / T
         calculatable = np.abs(energy_ratios) < 15
         fermi_distr[calculatable] = 1/(np.exp(energy_ratios[calculatable])+ 1)
-        fermi_distr[energy_ratios < -15] = 0
-        fermi_distr[energy_ratios > 15] = 1
+        fermi_distr[energy_ratios < -15] = 1
+        fermi_distr[energy_ratios > 15] = 0
         if self.DEBUG:
             check_bounds(valence_occupation, message='Valence occupation in fermi()')
             check_bounds(fermi_distr, message='Fermi distribution in fermi()')
@@ -234,13 +234,17 @@ class XNLsim:
         # Loop through sample depth
         for iz in range(self.par.Nsteps_z):
             rho_VB  = state_vector[iz, 2]
-            T       = state_vector[iz, 3]  # not used
+            T       = state_vector[iz, 3] / self.par.M_VB # need the thermal energy per electron
             thermal_occupations[iz, :] = self.fermi(T, rho_VB, self.par.E_j, self.par.E_f)
 
         if self.intermediate_plots:
             self.plot_thermal_occupations(thermal_occupations)
             plt.show(block = False)
             plt.pause(0.1)
+            
+        if self.DEBUG:
+            for j in range(self.par.N_photens):
+                check_bounds(thermal_occupations[:,j], 0, self.par.E_j[j], message = 'Just computed an unrealistic thermal occupation') 
         return thermal_occupations
 
     # Resonant interaction
@@ -255,18 +259,18 @@ class XNLsim:
 
     # Nonresonant interaction
     def proc_nonres_inter(self, N_Ej, rho_VB, rho_Ej):
-        valence_occ_deviation = ((rho_VB ) + np.sum(rho_Ej, axis=1)) / self.par.M_VB#- self.par.rho_VB_0
-        if self.DEBUG: check_bounds(valence_occ_deviation, -1, 1, message='valence occupation deviation in proc_nonres_inter()')
-        return (valence_occ_deviation * N_Ej.T).T / self.par.lambda_nonres
+        valence_occ = (rho_VB + np.sum(rho_Ej, axis=1)) / self.par.M_VB #self.par.M_VB#- self.par.rho_VB_0
+        if self.DEBUG: check_bounds(valence_occ, 0, 1, message='valence occupation deviation in proc_nonres_inter()')
+        return (valence_occ * N_Ej.T).T / self.par.lambda_nonres
 
     # Core-hole decay
     def proc_ch_decay(self, rho_CE, rho_VB, rho_Ej):
         core_holes = self.par.M_CE - rho_CE
-        valence_occ_deviation = ((rho_VB ) + np.sum(rho_Ej, axis=1)) / self.par.M_VB#- self.par.rho_VB_0
+        valence_occ = (rho_VB  + np.sum(rho_Ej, axis=1)) /self.par.M_VB# self.par.M_VB#- self.par.rho_VB_0
         if self.DEBUG:
             check_bounds(core_holes, message='Core holes in proc_ch_decay()')
-            check_bounds(valence_occ_deviation, message='Valence occupation in proc_ch_decay()')
-        return core_holes * valence_occ_deviation / self.par.tau_CH
+            check_bounds(valence_occ, 0, 1, message='Valence occupation in proc_ch_decay()')
+        return core_holes * valence_occ / self.par.tau_CH
 
     # Electron Thermalization
     def proc_el_therm(self, rho_Ej):
