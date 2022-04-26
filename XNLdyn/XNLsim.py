@@ -7,12 +7,12 @@ import warnings
 from .params import *
 
 
-def check_bounds(value, min = 0, max = 1.):
+def check_bounds(value, min=0, max=1., message=''):
     if np.any(value < min):
-        string = f'Found value up to {np.min(value[value < min])-min:.3f} under minimum of {min}.'
+        string = f'Found value up to {np.min(value[value < min])-min:.3f} under minimum of {min}.' + message
         warnings.warn(string)
     if np.any(value > max):
-        string = f'Found values {np.max(value[value > max])-max:.3f} over maximum of {max}.'
+        string = f'Found values {np.max(value[value > max])-max:.3f} over maximum of {max}.' + message
         warnings.warn(string)
 
 
@@ -155,7 +155,7 @@ class XNLpars:
 ## Main Simulation
 
 class XNLsim:
-    def __init__(self, par, DEBUG = False):
+    def __init__(self, par, DEBUG=False, atol=1e-18):
         self.DEBUG = DEBUG
         self.intermediate_plots = False
         self.par = par
@@ -165,7 +165,9 @@ class XNLsim:
         self.call_counter = 0
         self.thermal_occupations = None
 
-        
+        # Tolerance - variables are rounded to this value if they become very small to avoid float underfolows
+        self.atol = atol
+
     """
     Processes
     """
@@ -217,8 +219,8 @@ class XNLsim:
         fermi_distr[energy_ratios < -15] = 0
         fermi_distr[energy_ratios > 15] = 1
         if self.DEBUG:
-            check_bounds(valence_occupation)
-            check_bounds(fermi_distr)
+            check_bounds(valence_occupation, message='Valence occupation in fermi()')
+            check_bounds(fermi_distr, message='Fermi distribution in fermi()')
         return valence_occupation * self.par.M_Ej[j] * fermi_distr
     
     def calc_thermal_occupations(self, state_vector):
@@ -247,23 +249,23 @@ class XNLsim:
         thermal_deviation = self.thermal_occupations - self.par.fermi_el_at_T0_Ej
         valence_occupation = (rho_Ej + thermal_deviation) / self.par.M_Ej
         if self.DEBUG:
-            check_bounds(core_occupation)
-            check_bounds(valence_occupation)
+            check_bounds(core_occupation, message='Valence occupation in proc_res_inter_Ej()')
+            check_bounds(valence_occupation, message='Valence occupation in proc_res_inter_Ej()')
         return (core_occupation.T - valence_occupation.T).T * (N_Ej / self.par.lambda_res_Ej)
 
     # Nonresonant interaction
     def proc_nonres_inter(self, N_Ej, rho_VB, rho_Ej):
-        valence_occ_deviation = (rho_VB - self.par.rho_VB_0) + np.sum(rho_Ej, axis=1) / self.par.M_VB
-        if self.DEBUG: check_bounds(valence_occ_deviation, -1, 1)
+        valence_occ_deviation = ((rho_VB ) + np.sum(rho_Ej, axis=1)) / self.par.M_VB#- self.par.rho_VB_0
+        if self.DEBUG: check_bounds(valence_occ_deviation, -1, 1, message='valence occupation deviation in proc_nonres_inter()')
         return (valence_occ_deviation * N_Ej.T).T / self.par.lambda_nonres
 
     # Core-hole decay
     def proc_ch_decay(self, rho_CE, rho_VB, rho_Ej):
         core_holes = self.par.M_CE - rho_CE
-        valence_occ_deviation = (rho_VB - self.par.rho_VB_0) + np.sum(rho_Ej, axis=1) / self.par.M_VB
+        valence_occ_deviation = ((rho_VB ) + np.sum(rho_Ej, axis=1)) / self.par.M_VB#- self.par.rho_VB_0
         if self.DEBUG:
-            check_bounds(core_holes)
-            check_bounds(valence_occ_deviation)
+            check_bounds(core_holes, message='Core holes in proc_ch_decay()')
+            check_bounds(valence_occ_deviation, message='Valence occupation in proc_ch_decay()')
         return core_holes * valence_occ_deviation / self.par.tau_CH
 
     # Electron Thermalization
@@ -287,7 +289,7 @@ class XNLsim:
     def mean_valence_energy(self, rho_VB, rho_Ej, E_f):
         valence_occupation = rho_VB + np.sum(rho_Ej)
         if self.DEBUG:
-            check_bounds(valence_occupation, 0, self.par.M_VB)
+            check_bounds(valence_occupation, 0, self.par.M_VB, message='Valence occupation in mean_valence_energy()')
         return (rho_VB * E_f + np.sum(rho_Ej * self.par.E_j, axis=1)) / valence_occupation
 
     # unpacks state vector and calls all the process functions
@@ -388,13 +390,11 @@ class XNLsim:
     def time_derivative(self, t, state_vector_flat):
         # Reshape the state vector into sensible dimension
         state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
-        check_bounds(state_vector[:, 3], 0, np.inf) # The temperature must never become negative
-        state_vector[:, 3][state_vector[:, 3]<0] = 0 # Dirty fix since this seems to happen! Look into!
+        check_bounds(state_vector[:, 3], 0, np.inf, message = 'Temperature in time_derivative.') # The temperature must never become negative
+        #state_vector[state_vector<self.atol] = 0
+        #state_vector[:, 3][state_vector[:, 3]<0] = 0 # Dirty fix since this seems to happen! Look into!
         
         self.thermal_occupations = self.calc_thermal_occupations(state_vector)
-
-        # Initiate empty variables
-        derivatives = np.empty((self.par.Nsteps_z * self.par.states_per_voxel))
 
         # Calculate photon transmission as save it
         N_Ej_z = self.z_dependence(t, state_vector)
@@ -403,7 +403,7 @@ class XNLsim:
         res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence = \
             self.calc_processes(N_Ej_z[:, :], state_vector[:, :])
 
-        derivatives = np.zeros(state_vector.shape)
+        derivatives = np.empty(state_vector.shape)
         derivatives[:, 0] = self.rate_CE(res_inter, ch_decay)
         derivatives[:, 1] = self.rate_free(nonres_inter, ch_decay, el_scatt)
         derivatives[:, 2] = self.rate_VB(res_inter, nonres_inter, el_therm, ch_decay, el_scatt)
@@ -421,7 +421,7 @@ class XNLsim:
             *self.rate_E_j(res_inter, el_therm)])  # .reshape()
         """
         # Debug plotting
-        if self.intermediate_plots:
+        if True:#self.intermediate_plots:
             if np.mod(self.call_counter,20)==0:
                 self.plot_z_dependence(N_Ej_z)
                 self.plot_occupancies(state_vector)
