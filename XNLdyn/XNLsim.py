@@ -297,17 +297,17 @@ class XNLsim:
         if self.DEBUG:
             check_bounds(core_occupation, message='Valence occupation in proc_res_inter_Ej()')
             check_bounds(valence_occupation, message='Valence occupation in proc_res_inter_Ej()')
-        return (core_occupation.T - valence_occupation.T).T * (N_Ej / self.par.lambda_res_Ej)
+        return np.outer((core_occupation - valence_occupation), (N_Ej / self.par.lambda_res_Ej)) # returns j,i
 
     # Nonresonant interaction
     def proc_nonres_inter(self, N_Ej, rho_j):
         valence_occupation = rho_j/self.par.R_VB_0 # relative to the number valence states in the ground state
         if self.DEBUG: check_bounds(valence_occupation, 0, 1, message='valence occupation deviation in proc_nonres_inter()')
-        return (valence_occupation * N_Ej.T).T / self.par.lambda_nonres
+        return (valence_occupation.T* N_Ej.T).T / self.par.lambda_nonres # returns j,i
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
-        core_holes = (self.par.M_C - R_core)/ self.par.M_C
+        core_holes = (self.par.M_core - R_core)/ self.par.M_core
         if self.DEBUG:
             check_bounds(core_holes, message='Core holes in proc_ch_decay()')
         return core_holes * rho_j / self.par.tau_CH
@@ -339,7 +339,7 @@ class XNLsim:
         :return:
         """
         total_energy = np.sum(self.par.E_j * rho_j) + E_free
-        return total_energy / (np.sum(rho_j) + R_free)
+        return total_energy / (np.sum(rho_j, axis=1) + R_free)
 
 
     # unpacks state vector and calls all the process functions
@@ -366,7 +366,7 @@ class XNLsim:
         mean_valence = self.mean_valence_energy(rho_j, E_free, R_free)
         return res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
 
-    def rate_N_dz_j_direct(self, N_Ej, states, iz):
+    def rate_N_dz_j_direct(self, N_Ej, states):
         """
         Calculates only dN/dz for a given z.
         This one is for the directly coded light propagation
@@ -380,27 +380,22 @@ class XNLsim:
     """
     Rates - time derivatives 
     """
+    def rate_j(self, res_inter, nonres_inter, el_therm, ch_decay, rho_j, R_VB):
+        return res_inter - np.sum(nonres_inter, axis = 2) - ch_decay - (rho_j * np.sum(ch_decay, axis = 1)/R_VB) + el_therm
 
-    def rate_CE(self, res_inter, ch_decay):
-        return ch_decay - np.sum(res_inter, axis=1)
+    def rate_core(self, res_inter, ch_decay):
+        return np.sum(ch_decay, axis=1) - np.sum(res_inter, axis=1)
 
     def rate_free(self, nonres_inter, ch_decay, el_scatt):
-        return np.sum(nonres_inter, axis=1) + ch_decay - el_scatt
+        return np.sum(nonres_inter, axis=1) + np.sum(ch_decay, axis = 1) - el_scatt
 
-    def rate_VB(self, res_inter, nonres_inter, el_therm, ch_decay, el_scatt):
-        return np.sum(-nonres_inter + el_therm, axis=1) - 2 * ch_decay + el_scatt
+    # def rate_E_free(self, R_free):
+        # , nonres_inter, ch_decay, el_scatt, mean_free, mean_valence):
+        # energies_unfolded = np.outer(np.ones(self.par.Nsteps_z), self.par.E_j).T
+        # return np.sum(nonres_inter*(self.par.E_j-), axis = (1,2))
+        #     np.sum(nonres_inter * (energies_unfolded - mean_valence).T, axis=1) + (ch_decay * mean_valence) - (
+        #         el_scatt * mean_free)
 
-    def rate_E_j(self, res_inter, el_therm):
-        return res_inter - el_therm
-
-    def rate_E_free(self, nonres_inter, ch_decay, el_scatt, mean_free, mean_valence):
-        energies_unfolded = np.outer(np.ones(self.par.Nsteps_z), self.par.E_j).T
-        return np.sum(nonres_inter * (energies_unfolded - mean_valence).T, axis=1) + (ch_decay * mean_valence) - (
-                el_scatt * mean_free)
-
-    def rate_T(self, el_therm, el_scatt, mean_free, mean_valence):
-        energy_deviations_from_valence = (np.outer(np.ones(self.par.Nsteps_z), self.par.E_j).T - mean_valence).T
-        return np.sum(el_therm * energy_deviations_from_valence, axis=1) + el_scatt * mean_free
 
     """
     Propagation of photons through the sample
@@ -408,16 +403,16 @@ class XNLsim:
 
     def z_dependence(self, t, state_vector):
         def zstep_euler(self, N, state_vector, iz):
-            return N + self.rate_N_dz_j_direct(N, state_vector[iz, :], iz) * self.par.zstepsize
+            return N + self.rate_N_dz_j_direct(N, state_vector[iz, :]) * self.par.zstepsize
 
         def double_zstep_RK(self, N, state_vector, iz):
             """
             Since I only know the states at specific points in z, I cheat by doubling the effective z step.
             """
-            k1 = self.rate_N_dz_j_direct(N, state_vector[iz, :], iz)
-            k2 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k1, state_vector[iz + 1, :], iz)
-            k3 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k2, state_vector[iz + 1, :], iz)
-            k4 = self.rate_N_dz_j_direct(N + self.par.zstepsize * 2 * k3, state_vector[iz + 2, :], iz)
+            k1 = self.rate_N_dz_j_direct(N, state_vector[iz, :])
+            k2 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k1, state_vector[iz + 1, :])
+            k3 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k2, state_vector[iz + 1, :])
+            k4 = self.rate_N_dz_j_direct(N + self.par.zstepsize * 2 * k3, state_vector[iz + 2, :])
             return N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4)
 
         # get current photon irradiation:
