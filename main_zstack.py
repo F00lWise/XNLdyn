@@ -18,15 +18,18 @@ if __name__ == '__main__':
 
     pulse_energy_J = 1e-20 # J
 
-    PAR.I0 =  [XNLdyn.photons_per_J(PAR.E_j[0])*pulse_energy_J,]
+    PAR.I0 =  [XNLdyn.photons_per_J(PAR.E_i[0])*pulse_energy_J,]
 
     sim = XNLdyn.XNLsim(PAR, DEBUG=True)
 
-    sim_options = dict(t_span=[-40, 60], method='RK45', rtol=1e-6, atol=1e-8, plot=True, return_full_solution=True)
+    print(PAR.enax_j)
+    #
 
-    incident, transmitted, sol = sim.run(**sim_options)
+    #sim_options = dict(t_span=[-40, 60], method='RK45', rtol=1e-6, atol=1e-8, plot=True, return_full_solution=True)
 
-    print('Transmission: ', 100 * transmitted / incident, ' %')
+    #incident, transmitted, sol = sim.run(**sim_options)
+
+    #print('Transmission: ', 100 * transmitted / incident, ' %')
 
 
-    plt.show()
+    #plt.show()

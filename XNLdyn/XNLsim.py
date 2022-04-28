@@ -9,12 +9,11 @@ from .params import *
 
 def check_bounds(value, min=0, max=1., message=''):
     if np.any(value < min):
-        string = f'Found value up to {np.min(value[value < min])-min:.3e} under minimum of {min}.' + message
+        string = f'Found value up to {np.min(value[value < min]) - min:.3e} under minimum of {min}.' + message
         warnings.warn(string)
     if np.any(value > max):
-        string = f'Found values {np.max(value[value > max])-max:.3e} over maximum of {max}.' + message
+        string = f'Found values {np.max(value[value > max]) - max:.3e} over maximum of {max}.' + message
         warnings.warn(string)
-
 
 
 class XNLpars:
@@ -28,7 +27,9 @@ class XNLpars:
 
         self.Nsteps_z = Nsteps_z  # Steps in Z
         self.N_photens = N_photens  # Number of distict resonant photon energies
-        
+
+        self.N_j = N_j
+
         ## Sample thickness
         self.Z = Z  # nm
 
@@ -55,40 +56,40 @@ class XNLpars:
         self.t0 = np.array(t0)
         self.tdur_sig = np.array(tdur_sig)
         self.E_i = np.array(E_i)
-        
 
         assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_i) == len(lambda_res_Ei)), \
             'Make sure all photon pulses get all parameters!'
 
     def make_derived_params(self, sim):
         ## Just making sure these are arrays (not tuples or lists or whatever)
-        self.lambda_res_Ej = np.array(self.lambda_res_Ej)
+        self.lambda_res_Ei = np.array(self.lambda_res_Ei)
         self.I0 = np.array(self.I0)
         self.t0 = np.array(self.t0)
         self.tdur_sig = np.array(self.tdur_sig)
-        self.E_j = np.array(self.E_j)
-        
+        self.E_i = np.array(self.E_i) - self.E_f  # self.E_i becomes relative to Fermi edge
+
         ## now some derived quantities
         self.zstepsize = self.Z / self.Nsteps_z
         self.zaxis = np.arange(0, self.Z, self.zstepsize)
 
         self.states_per_voxel = 5 + self.N_photens  # Just the number of entries for later convenience
 
-        ## Multiplicities - these are global for all t and z
-        self.M_CE = self.atomic_density * self.core_states
-        self.M_VB = self.atomic_density * self.total_valence_states
-        self.M_Ej = np.array([self.M_VB * self.get_resonant_states(self.E_j[j] - self.E_f, self.photon_bandwidth) \
-                              for j in range(self.N_photens)])
+        self.make_valence_energy_axis(self.N_j)
 
         # Load DoS data
         ld = np.load(self.DoS_shapefile)
         self.DoSdata = {}
         self.DoSdata['x'] = ld[:, 0]
         self.DoSdata['y_atomar'] = ld[:, 1]
-        self.DoSdata['y'] = self.DoSdata['y_atomar'] * self.M_VB
+        self.DoSdata['y'] = self.DoSdata['y_atomar']  # * self.M_VB
         self.DoSdata['osi'] = np.array([np.trapz(self.DoSdata['y'][:i], x=self.DoSdata['x'][:i]) for i in range(
             len(self.DoSdata['x']))])  # one-sided integral for calculating Fermi energy
 
+        ## Multiplicities - these are global for all t and z
+        self.M_CE = self.atomic_density * self.core_states
+        self.M_VB = self.atomic_density * self.total_valence_states
+        self.M_Ei = np.array([self.M_VB * self.get_resonant_states(self.E_i[i], self.photon_bandwidth) \
+                              for i in range(self.N_photens)])
 
         ## Initial populations
         self.rho_core_0 = self.M_CE  # Initially fully occupied
@@ -99,7 +100,7 @@ class XNLpars:
         self.rho_Ej_0 = [0] * N_photens  # Deviations from thermal distributions are initially zero in equilibrium
 
         # Calculate initial contribution of the thermal distribution at the resonant photon energies
-        self.fermi_el_at_T0_Ej = sim.fermi(self.enpool_T_0, self.rho_VB_0, self.E_j, self.E_f)
+        # self.fermi_el_at_T0_Ei = sim.fermi(self.enpool_T_0, self.rho_VB_0, self.E_i, self.E_f)
 
         # This vector contains all parameters that are tracked over time
         self.state_vector_0 = np.array([
@@ -111,21 +112,26 @@ class XNLpars:
                                            *self.rho_Ej_0] * self.Nsteps_z).reshape(self.Nsteps_z,
                                                                                     self.states_per_voxel)
 
-        #print('Initiated simulation parameters.\n Number of tracked parameters: ', np.size(self.state_vector_0))
+        # print('Initiated simulation parameters.\n Number of tracked parameters: ', np.size(self.state_vector_0))
 
-    def get_resonant_states(self, E, resonant_width, npoints=10):
+
+    def get_resonant_states(self):
         """
         Returns the number of states resonant to the photon energy E,
         assuming a certain resonant width.
         The DoS data stored in the file should be normalized to unity.
         A re-sampling is done to prevent any funny businness due to the sampling density of the DoS.
         """
-        Emin = E - resonant_width
-        Emax = E + resonant_width
+        for j in self.enax_j:
+            Emin = self.enax_j_edges[j]
+            Emax = self.enax_j_edges[j+1]
 
-        X = np.linspace(Emin, Emax, npoints)
-        Y = np.interp(X, self.DoSdata['x'], self.DoSdata['y'])
+### Bis hier gekommen!
+
+            X = np.linspace(Emin, Emax, npoints)
+            Y = np.interp(X, self.DoSdata['x'], self.DoSdata['y'])
         return np.trapz(y=Y, x=X)
+
 
     def get_initial_valence_occupation(self):
         """
@@ -143,50 +149,50 @@ class XNLpars:
         """
         return self.I0 * np.exp(-0.5 * ((t - self.t0) / self.tdur_sig) ** 2) * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig)
 
-    def make_valence_energy_axis(self, N_j, min = -6, finemax = 4, max = 20):
-
-        N_j_fine = N_j * 3 / 4
-        N_j_coarse= N_j - N_j_fine
+    def make_valence_energy_axis(self, N_j: np.int, min=-6, finemax=4, max=20):
+        """
+        Creates an energy axis for the valence band, namely
+            self.enax_j
+        and its edgepoints
+            self.enax_j_edges
+        Energies are relative to the fermi-level. 3/4 of all points fall into the range (min, finemax)
+        Makes sure that the energies E_i correspond to a point in E_j and
+        drops the closest points to keep the number N_j.
+        :param N_j:
+        :param min:
+        :param finemax:
+        :param max:
+        :return:
+        """
+        N_j_fine = int(N_j * 3 / 4)
+        N_j_coarse = int(N_j - N_j_fine)
 
         # Midpoints!
         enax_j_fine = list(np.linspace(min, finemax, N_j_fine))
-        dE_fine     = enax_j_fine[1]-enax_j_fine[0]
-        enax_j_coarse = list(np.linspace(finemax, max, N_j_coarse))
+        dE_fine = enax_j_fine[1] - enax_j_fine[0]
+        enax_j_coarse = list(np.linspace(finemax + dE_fine, max, N_j_coarse))
         # make sure that resonant energies are in there
-        enax_j = np.sort(np.array(enax_j_fine + enax_j_coarse + self.E_i ))
+        enax_j = np.concatenate((enax_j_fine, enax_j_coarse))
+        good_js = list(np.ones(enax_j.shape, dtype=bool))
+        for i in range(self.N_photens):
+            deltas = enax_j - self.E_i[i]
+            good_js[np.argmin(deltas)] = False  # drop the one closest to E_i
+        enax_j = np.sort(np.concatenate((enax_j[good_js], self.E_i)))
 
-        # Make sure that there are not two points ust next to each other
-        deltas = enax_j[1:]-enax_j[:-1]
-        too_close = deltas < dE_fine
-        if np.any(too_close):
-            good_js = list(np.ones(enax_j.shape, dtype = bool))
-            for j, E_j in enumerate(enax_j):
-                # First
-                if j == 0:
-                    continue
-                # is too close
-                elif too_close[j-1]:
-                    if enax_j[j-1] in self.E_i:
-                        if enax_j[j] in self.E_i:
-                            #Both must be kept
-                            warnings.warn(f'Incident energies {enax_j[j-1]} and {enax_j[j]} are closer together than the energy resolution otherwise.')
-                        else:
-                            good_js[j] = False #j-1 must be kept
-                    else:
-                        good_js[j-1] = False # j-1 can be dropped
-            enax_j = enax_j[good_js]
+        if not len(enax_j) == N_j:
+            warnings.warn(
+                'Energy Axis turned out longer or shorter than planne. Are resonant energies very close together?')
+
         def edgepoints(middles):
             """ Opposite of midpoints """
             edges = np.empty(middles.shape[0] + 1)
-            edges[1:-1] = midpoints(middles)
+            edges[1:-1] = (middles[1:] + middles[:-1]) / 2
             edges[0] = middles[0] - (middles[1] - middles[0]) / 2
             edges[-1] = middles[-1] + (middles[-1] - middles[-2]) / 2
             return edges
 
         self.enax_j = enax_j
         self.enax_j_edges = edgepoints(enax_j)
-
-
 
 
 ## Main Simulation
@@ -209,7 +215,7 @@ class XNLsim:
     Processes
     """
 
-    def run(self, t_span, method, rtol, atol, plot = False, return_full_solution = False, set_debug = False):
+    def run(self, t_span, method, rtol, atol, plot=False, return_full_solution=False, set_debug=False):
         """
         Run the simulation once for a z-stack
 
@@ -237,7 +243,7 @@ class XNLsim:
 
         if plot:
             self.plot_results(sol, sol_photon_densities)
-        
+
         if return_full_solution:
             return incident_pulse_energies, transmitted_pulse_energies, sol
         else:
@@ -252,14 +258,14 @@ class XNLsim:
         fermi_distr = np.zeros(E_j.shape)
         energy_ratios = (E_j - E_f) / T
         calculatable = np.abs(energy_ratios) < 15
-        fermi_distr[calculatable] = 1/(np.exp(energy_ratios[calculatable])+ 1)
+        fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
         fermi_distr[energy_ratios < -15] = 1
         fermi_distr[energy_ratios > 15] = 0
         if self.DEBUG:
             check_bounds(valence_occupation, message='Valence occupation in fermi()')
             check_bounds(fermi_distr, message='Fermi distribution in fermi()')
-        return valence_occupation * fermi_distr #* self.par.M_Ej[j]
-    
+        return valence_occupation * fermi_distr  # * self.par.M_Ej[j]
+
     def calc_thermal_occupations(self, state_vector):
         """
         It appears favorable to do this separately at the beginning of the call
@@ -270,18 +276,19 @@ class XNLsim:
 
         # Loop through sample depth
         for iz in range(self.par.Nsteps_z):
-            rho_VB  = state_vector[iz, 2]
-            T       = state_vector[iz, 3] / self.par.M_VB # need the thermal energy per electron
+            rho_VB = state_vector[iz, 2]
+            T = state_vector[iz, 3] / self.par.M_VB  # need the thermal energy per electron
             thermal_occupations[iz, :] = self.fermi(T, rho_VB, self.par.E_j, self.par.E_f)
 
         if self.intermediate_plots:
             self.plot_thermal_occupations(thermal_occupations)
-            plt.show(block = False)
+            plt.show(block=False)
             plt.pause(0.1)
-            
+
         if self.DEBUG:
             for j in range(self.par.N_photens):
-                check_bounds(thermal_occupations[:,j], 0, self.par.E_j[j], message = 'Just computed an unrealistic thermal occupation') 
+                check_bounds(thermal_occupations[:, j], 0, self.par.E_j[j],
+                             message='Just computed an unrealistic thermal occupation')
         return thermal_occupations
 
     # Resonant interaction
@@ -296,14 +303,14 @@ class XNLsim:
 
     # Nonresonant interaction
     def proc_nonres_inter(self, N_Ej, rho_VB, rho_Ej):
-        valence_occ = (rho_VB + np.sum(rho_Ej, axis=1)) / self.par.M_VB #self.par.M_VB#- self.par.rho_VB_0
+        valence_occ = (rho_VB + np.sum(rho_Ej, axis=1)) / self.par.M_VB  # self.par.M_VB#- self.par.rho_VB_0
         if self.DEBUG: check_bounds(valence_occ, 0, 1, message='valence occupation deviation in proc_nonres_inter()')
         return (valence_occ * N_Ej.T).T / self.par.lambda_nonres
 
     # Core-hole decay
     def proc_ch_decay(self, rho_CE, rho_VB, rho_Ej):
         core_holes = self.par.M_CE - rho_CE
-        valence_occ = (rho_VB  + np.sum(rho_Ej, axis=1)) /self.par.M_VB# self.par.M_VB#- self.par.rho_VB_0
+        valence_occ = (rho_VB + np.sum(rho_Ej, axis=1)) / self.par.M_VB  # self.par.M_VB#- self.par.rho_VB_0
         if self.DEBUG:
             check_bounds(core_holes, message='Core holes in proc_ch_decay()')
             check_bounds(valence_occ, 0, 1, message='Valence occupation in proc_ch_decay()')
@@ -364,7 +371,7 @@ class XNLsim:
         rho_Ej = states[5:]
         res_inter = ((rho_CE / self.par.M_CE) - (rho_Ej + self.thermal_occupations[iz, :] -
                                                  self.par.fermi_el_at_T0_Ej) / self.par.M_Ej) \
-                                                 * (N_Ej / self.par.lambda_res_Ej)
+                    * (N_Ej / self.par.lambda_res_Ej)
         return -res_inter
 
     """
@@ -386,10 +393,10 @@ class XNLsim:
     def rate_E_free(self, nonres_inter, ch_decay, el_scatt, mean_free, mean_valence):
         energies_unfolded = np.outer(np.ones(self.par.Nsteps_z), self.par.E_j).T
         return np.sum(nonres_inter * (energies_unfolded - mean_valence).T, axis=1) + (ch_decay * mean_valence) - (
-                    el_scatt * mean_free)
+                el_scatt * mean_free)
 
     def rate_T(self, el_therm, el_scatt, mean_free, mean_valence):
-        energy_deviations_from_valence= (np.outer(np.ones(self.par.Nsteps_z), self.par.E_j).T- mean_valence).T
+        energy_deviations_from_valence = (np.outer(np.ones(self.par.Nsteps_z), self.par.E_j).T - mean_valence).T
         return np.sum(el_therm * energy_deviations_from_valence, axis=1) + el_scatt * mean_free
 
     """
@@ -431,10 +438,11 @@ class XNLsim:
     def time_derivative(self, t, state_vector_flat):
         # Reshape the state vector into sensible dimension
         state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
-        check_bounds(state_vector[:, 3], 0, np.inf, message = 'Temperature in time_derivative.') # The temperature must never become negative
-        #state_vector[state_vector<self.atol] = 0
-        #state_vector[:, 3][state_vector[:, 3]<0] = 0 # Dirty fix since this seems to happen! Look into!
-        
+        check_bounds(state_vector[:, 3], 0, np.inf,
+                     message='Temperature in time_derivative.')  # The temperature must never become negative
+        # state_vector[state_vector<self.atol] = 0
+        # state_vector[:, 3][state_vector[:, 3]<0] = 0 # Dirty fix since this seems to happen! Look into!
+
         self.thermal_occupations = self.calc_thermal_occupations(state_vector)
 
         # Calculate photon transmission as save it
@@ -454,47 +462,48 @@ class XNLsim:
 
         # Debug plotting
         if self.intermediate_plots:
-            if np.mod(self.call_counter,20)==0:
+            if np.mod(self.call_counter, 20) == 0:
                 self.plot_z_dependence(N_Ej_z)
                 self.plot_occupancies(state_vector)
                 self.plot_derivatives(derivatives)
-                plt.show(block = False)
+                plt.show(block=False)
                 plt.pause(0.1)
 
         self.call_counter += 1
         return derivatives.flatten()
 
-    def plot_z_dependence(self,N_Ej_z):
+    def plot_z_dependence(self, N_Ej_z):
         if not 'figure_z' in dir(self):
             self.figure_z = plt.figure()
             self.axis_z = plt.gca()
         else:
             plt.sca(self.axis_z)
 
-        plt.plot(self.par.zaxis,N_Ej_z)
+        plt.plot(self.par.zaxis, N_Ej_z)
         plt.xlabel('z')
         plt.ylabel('Photon density')
         self.axis_z.set_title(f'Z-Dependence')
-        
+
     def plot_occupancies(self, state_vector):
         if not 'figure_occ' in dir(self):
             self.figure_occ = plt.figure()
             self.axis_occ = plt.gca()
-            
+
         else:
             plt.sca(self.axis_occ)
             self.axis_occ.clear()
-        plt.plot(self.par.zaxis, (state_vector[:,0]/self.par.M_CE )-1, label = 'Core occupation variation')
-        plt.plot(self.par.zaxis,  state_vector[:,1], label = 'Free electrons')
-        plt.plot(self.par.zaxis, (state_vector[:,2]-self.par.rho_VB_0)/self.par.M_VB, label = 'VB occupation variation')
-        plt.plot(self.par.zaxis,  state_vector[:,3]-(300*self.par.kB), label = 'T')
-        plt.plot(self.par.zaxis,  state_vector[:,4], label = 'E')
-        plt.plot(self.par.zaxis, state_vector[:, 5:]/self.par.M_Ej, label = 'Resonant occupations')
+        plt.plot(self.par.zaxis, (state_vector[:, 0] / self.par.M_CE) - 1, label='Core occupation variation')
+        plt.plot(self.par.zaxis, state_vector[:, 1], label='Free electrons')
+        plt.plot(self.par.zaxis, (state_vector[:, 2] - self.par.rho_VB_0) / self.par.M_VB,
+                 label='VB occupation variation')
+        plt.plot(self.par.zaxis, state_vector[:, 3] - (300 * self.par.kB), label='T')
+        plt.plot(self.par.zaxis, state_vector[:, 4], label='E')
+        plt.plot(self.par.zaxis, state_vector[:, 5:] / self.par.M_Ej, label='Resonant occupations')
         plt.legend()
         plt.xlabel('z')
         plt.ylabel('Photon density')
         self.axis_occ.set_title('Occupancies')
-        
+
     def plot_derivatives(self, derivatives):
         if not 'figure_der' in dir(self):
             self.figure_der = plt.figure()
@@ -503,18 +512,18 @@ class XNLsim:
             plt.sca(self.axis_der)
             self.axis_der.clear()
         der = derivatives.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
-        plt.plot(der[:,0]/self.par.M_CE, label = 'Core derivative')
-        plt.plot(der[:,1], label = 'Free electrons')
-        plt.plot(der[:,2]/self.par.M_VB, label = 'VB derivative')
-        plt.plot(der[:,3], label = 'T')
-        plt.plot(der[:,4], label = 'E')
-        plt.plot(der[:, 5:]/self.par.M_Ej, label = 'Resonant derivative')
+        plt.plot(der[:, 0] / self.par.M_CE, label='Core derivative')
+        plt.plot(der[:, 1], label='Free electrons')
+        plt.plot(der[:, 2] / self.par.M_VB, label='VB derivative')
+        plt.plot(der[:, 3], label='T')
+        plt.plot(der[:, 4], label='E')
+        plt.plot(der[:, 5:] / self.par.M_Ej, label='Resonant derivative')
         plt.legend()
         plt.xlabel('z')
         plt.ylabel('Photon density')
         self.axis_der.set_title('Derivatives')
 
-    def plot_thermal_occupations(self, thermal_occupations = None):
+    def plot_thermal_occupations(self, thermal_occupations=None):
         if not 'figure_therm' in dir(self):
             self.figure_therm = plt.figure()
             self.axis_therm = plt.gca()
@@ -524,10 +533,10 @@ class XNLsim:
 
         if thermal_occupations is None:
             thermal_occupations = self.thermal_occupations
-            
+
         self.axis_therm.set_title('Thermal Occupations')
         plt.plot(thermal_occupations)
-        
+
     def plot_results(self, sol, sol_photon_densities):
         PAR = self.par
         ## Plotting
@@ -540,10 +549,10 @@ class XNLsim:
         sol_Ej = soly[:, 5:, :]
 
         fig, axes = plt.subplots(2, 2, figsize=(8, 8))
-        plt.sca(axes[0,0])
+        plt.sca(axes[0, 0])
         plt.title('State occupation changes')
-        plt.plot(sol.t, 1- (np.mean(sol_core, 0) / PAR.M_CE), label='Core holes')
-        plt.plot(sol.t, 1- (sol_core[0] / PAR.M_CE) , label='Core holes [0]')
+        plt.plot(sol.t, 1 - (np.mean(sol_core, 0) / PAR.M_CE), label='Core holes')
+        plt.plot(sol.t, 1 - (sol_core[0] / PAR.M_CE), label='Core holes [0]')
 
         plt.plot(sol.t, (np.mean(sol_VB, 0) - PAR.rho_VB_0) / PAR.M_VB, label='Valence band occupation')
         plt.plot(sol.t, (sol_VB[0] - PAR.rho_VB_0) / PAR.M_VB, label='Valence @surface')
@@ -555,7 +564,7 @@ class XNLsim:
         plt.xlabel('t (fs)')
         plt.legend()
 
-        plt.sca(axes[0,1])
+        plt.sca(axes[0, 1])
         plt.title('Kinetic electrons')
 
         plt.plot(sol.t, np.mean(sol_free, 0), label='Kinetic electrons')
@@ -565,7 +574,7 @@ class XNLsim:
         plt.xlabel('t (fs)')
         plt.legend()
 
-        plt.sca(axes[1,0])
+        plt.sca(axes[1, 0])
         plt.title('Energies Averaged over z')
         plt.plot(sol.t, np.mean(sol_T, 0), label='Valence Thermal Energy')
         plt.plot(sol.t, np.mean(sol_Efree, 0), label='Free Electron Energy')
@@ -575,19 +584,19 @@ class XNLsim:
         plt.xlabel('t (fs)')
         plt.legend()
 
-        plt.sca(axes[1,1])
+        plt.sca(axes[1, 1])
         plt.title('Photons')
         plt.xlabel('t (fs)')
 
         plt.plot(sol.t, sol_photon_densities[-1, :, :].T,
-                 label=[f'Transmitted {PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in range(PAR.N_photens)])
-        
+                 label=[f'Transmitted {PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in
+                        range(PAR.N_photens)])
+
         plt.plot(sol.t, sol_photon_densities[0, :, :].T,
                  label=[f'Incident {PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in range(PAR.N_photens)])
         plt.legend()
         plt.ylabel('T')
         plt.xlabel('t (fs)')
-
 
         plt.tight_layout()
         plt.show()
