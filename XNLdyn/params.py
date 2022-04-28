@@ -1,5 +1,5 @@
 Nsteps_z = 25     # Steps in Z
-N_photens= 1      # Number of distict resonant photon energies
+N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
 
 ## Sample data
@@ -19,7 +19,7 @@ DoS_shapefile = './DoSdata.npy'
 tau_CH = 4       # Core hole lifetime / fs
 tau_free = 0.8   # Kinetic electron lifetime / fs
 tau_therm = 0.1  # Redistribution time of electrons in the VB / fs
-lambda_res_Ej = (10,)  # Absorptions length of resonant photon energies / nm
+lambda_res_Ei = (10,)  # Absorptions length of resonant photon energies / nm
 lambda_nonres = 500    # Absorption length of non-resonant photons, assumed equal for all / nm
 
 
@@ -30,4 +30,4 @@ E_f = 850.7 #eV
 I0       = [1,]   # Pulse energy density in photons per nm²
 t0       = [0,]   # Arrival time on time-axis / fs
 tdur_sig = [10,]   # Rms pulse duration / fs
-E_j      = [855,] # Photon Energies of incident pulses / eV
+E_i      = [855,] # Photon Energies of incident pulses / eV

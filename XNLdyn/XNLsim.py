@@ -43,9 +43,8 @@ class XNLpars:
 
         ## Rates and cross sections
         self.tau_CH = tau_CH
-        self.tau_free = tau_free
-        self.tau_therm = tau_therm
-        self.lambda_res_Ej = np.array(lambda_res_Ej)
+        self.tau_th = tau_th
+        self.lambda_res_Ei = np.array(lambda_res_Ei)
         self.lambda_nonres = lambda_nonres
 
         ## Fermi Energy
@@ -55,10 +54,10 @@ class XNLpars:
         self.I0 = np.array(I0)
         self.t0 = np.array(t0)
         self.tdur_sig = np.array(tdur_sig)
-        self.E_j = np.array(E_j)
+        self.E_i = np.array(E_i)
         
 
-        assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_j) == len(lambda_res_Ej)), \
+        assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_i) == len(lambda_res_Ei)), \
             'Make sure all photon pulses get all parameters!'
 
     def make_derived_params(self, sim):
@@ -144,14 +143,50 @@ class XNLpars:
         """
         return self.I0 * np.exp(-0.5 * ((t - self.t0) / self.tdur_sig) ** 2) * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig)
 
-    def get_fermi(self, occup):
-        """
-        Calculates the current Fermi energy change from the current occupation if the valence system
-        """
-        if (occup > 1) or (occup < 0):
-            raise RuntimeError('Occupation outside possible bounds!')
-        dx = self.DoSdata['x'][1] - self.DoSdata['x'][0]
-        return np.interp(occup, self.DoSdata['osi'], self.DoSdata['x'] - dx)
+    def make_valence_energy_axis(self, N_j, min = -6, finemax = 4, max = 20):
+
+        N_j_fine = N_j * 3 / 4
+        N_j_coarse= N_j - N_j_fine
+
+        # Midpoints!
+        enax_j_fine = list(np.linspace(min, finemax, N_j_fine))
+        dE_fine     = enax_j_fine[1]-enax_j_fine[0]
+        enax_j_coarse = list(np.linspace(finemax, max, N_j_coarse))
+        # make sure that resonant energies are in there
+        enax_j = np.sort(np.array(enax_j_fine + enax_j_coarse + self.E_i ))
+
+        # Make sure that there are not two points ust next to each other
+        deltas = enax_j[1:]-enax_j[:-1]
+        too_close = deltas < dE_fine
+        if np.any(too_close):
+            good_js = list(np.ones(enax_j.shape, dtype = bool))
+            for j, E_j in enumerate(enax_j):
+                # First
+                if j == 0:
+                    continue
+                # is too close
+                elif too_close[j-1]:
+                    if enax_j[j-1] in self.E_i:
+                        if enax_j[j] in self.E_i:
+                            #Both must be kept
+                            warnings.warn(f'Incident energies {enax_j[j-1]} and {enax_j[j]} are closer together than the energy resolution otherwise.')
+                        else:
+                            good_js[j] = False #j-1 must be kept
+                    else:
+                        good_js[j-1] = False # j-1 can be dropped
+            enax_j = enax_j[good_js]
+        def edgepoints(middles):
+            """ Opposite of midpoints """
+            edges = np.empty(middles.shape[0] + 1)
+            edges[1:-1] = midpoints(middles)
+            edges[0] = middles[0] - (middles[1] - middles[0]) / 2
+            edges[-1] = middles[-1] + (middles[-1] - middles[-2]) / 2
+            return edges
+
+        self.enax_j = enax_j
+        self.enax_j_edges = edgepoints(enax_j)
+
+
 
 
 ## Main Simulation
