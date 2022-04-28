@@ -18,13 +18,13 @@ def check_bounds(value, min=0, max=1., message=''):
 
 class XNLpars:
     def __init__(self):
-        # Some constants
+        ## Some constants
         self.kB = 8.617333262145e-5  # Boltzmann Konstant / eV/K
         self.lightspeed = 299792458  # m/s
         self.hbar = 6.582119569e-15  # eV s
         self.echarge = 1.602176634e-19  # J/eV
-        ## Here I just "package" the variables from the params file into class attributes
 
+        ## Here I just "package" the variables from the params file into class attributes
         self.Nsteps_z = Nsteps_z  # Steps in Z
         self.N_photens = N_photens  # Number of distict resonant photon energies
 
@@ -37,7 +37,7 @@ class XNLpars:
         self.photon_bandwidth = photon_bandwidth  # The energy span of the valence band that each resonant energy interacts with./ eV
         self.temperature = temperature  # Kelvin
 
-        # Electronic state numbers per atom
+        ## Electronic state numbers per atom
         self.core_states = core_states
         self.total_valence_states = total_valence_states
         self.DoS_shapefile = DoS_shapefile
@@ -61,7 +61,7 @@ class XNLpars:
             'Make sure all photon pulses get all parameters!'
 
     def make_derived_params(self, sim):
-        ## Just making sure these are arrays (not tuples or lists or whatever)
+        ## Just making sure these are arrays in case they were modified (not tuples or lists or whatever)
         self.lambda_res_Ei = np.array(self.lambda_res_Ei)
         self.I0 = np.array(self.I0)
         self.t0 = np.array(self.t0)
@@ -72,11 +72,10 @@ class XNLpars:
         self.zstepsize = self.Z / self.Nsteps_z
         self.zaxis = np.arange(0, self.Z, self.zstepsize)
 
-        self.states_per_voxel = 5 + self.N_photens  # Just the number of entries for later convenience
 
-        self.make_valence_energy_axis(self.N_j)
+        self.enax_j, self.enax_j_edges = self.make_valence_energy_axis(self.N_j)
 
-        # Load DoS data
+        ## Load DoS data
         ld = np.load(self.DoS_shapefile)
         self.DoSdata = {}
         self.DoSdata['x'] = ld[:, 0]
@@ -88,50 +87,42 @@ class XNLpars:
         ## Multiplicities - these are global for all t and z
         self.M_CE = self.atomic_density * self.core_states
         self.M_VB = self.atomic_density * self.total_valence_states
-        self.M_Ei = np.array([self.M_VB * self.get_resonant_states(self.E_i[i], self.photon_bandwidth) \
-                              for i in range(self.N_photens)])
+        self.m_j = self.get_resonant_states(self.M_VB)
 
         ## Initial populations
-        self.rho_core_0 = self.M_CE  # Initially fully occupied
-        self.rho_free_0 = 0  # Initially not occupied
-        self.rho_VB_0 = self.get_initial_valence_occupation() * self.M_VB  # Initially occupied up to Fermi Energy
-        self.enpool_T_0 = self.kB * temperature * self.M_VB  # Initial thermal energy of valence electron system
-        self.enpool_free_0 = 0  # Initial energy of kinetic electrons, Initally zero
-        self.rho_Ej_0 = [0] * N_photens  # Deviations from thermal distributions are initially zero in equilibrium
+        self.R_core_0 = self.M_CE  # Initially fully occupied
+        self.R_free_0 = 0  # Initially not occupied
+        self.E_free_0 = 0  # Initial energy of kinetic electrons, Initally zero
+        self.rho_j_0 = self.m_j * sim.fermi(self.kB * temperature)  # occupied acording to initial temperature
 
-        # Calculate initial contribution of the thermal distribution at the resonant photon energies
-        # self.fermi_el_at_T0_Ei = sim.fermi(self.enpool_T_0, self.rho_VB_0, self.E_i, self.E_f)
+        ## derived from these
+        self.R_VB_0 = np.sum(self.rho_j_0)  # Initially occupied up to Fermi Energy
+        self.enpool_T_0 = self.kB * temperature  # Initial thermal energy of the average valence electron
 
         # This vector contains all parameters that are tracked over time
+        self.states_per_voxel = 3 + self.N_j  # Just the number of entries for later convenience
         self.state_vector_0 = np.array([
-                                           self.rho_core_0,
-                                           self.rho_free_0,
-                                           self.rho_VB_0,
-                                           self.enpool_T_0,
-                                           self.enpool_free_0,
-                                           *self.rho_Ej_0] * self.Nsteps_z).reshape(self.Nsteps_z,
-                                                                                    self.states_per_voxel)
+                                           self.R_core_0,
+                                           self.R_free_0,
+                                           self.E_free_0,
+                                           *self.rho_j_0] * self.N_j).reshape(self.N_j, self.states_per_voxel)
 
-        # print('Initiated simulation parameters.\n Number of tracked parameters: ', np.size(self.state_vector_0))
-
-
-    def get_resonant_states(self):
+    def get_resonant_states(self, M_VB):
         """
-        Returns the number of states resonant to the photon energy E,
-        assuming a certain resonant width.
-        The DoS data stored in the file should be normalized to unity.
-        A re-sampling is done to prevent any funny businness due to the sampling density of the DoS.
+        Returns the partial state densities at energies Ej so that sum(m_j) = M_VB
         """
-        for j in self.enax_j:
+        m_j = np.empty(self.N_j)
+        for j in range(self.enax_j):
             Emin = self.enax_j_edges[j]
             Emax = self.enax_j_edges[j+1]
 
-### Bis hier gekommen!
-
-            X = np.linspace(Emin, Emax, npoints)
+            X = np.linspace(Emin, Emax, 10)
             Y = np.interp(X, self.DoSdata['x'], self.DoSdata['y'])
-        return np.trapz(y=Y, x=X)
 
+            m_j[j] = np.trapz(y=Y, x=X)
+        m_j = m_j / np.sum(m_j) # make sure its normalized to the sum
+        m_j = m_j * M_VB
+        return m_j
 
     def get_initial_valence_occupation(self):
         """
@@ -191,8 +182,7 @@ class XNLpars:
             edges[-1] = middles[-1] + (middles[-1] - middles[-2]) / 2
             return edges
 
-        self.enax_j = enax_j
-        self.enax_j_edges = edgepoints(enax_j)
+        return enax_j, edgepoints(enax_j)
 
 
 ## Main Simulation
@@ -250,21 +240,26 @@ class XNLsim:
             return incident_pulse_energies, transmitted_pulse_energies
 
     # Calcf(T,i)
-    def fermi(self, T, rho_VB, E_j, E_f, j=np.s_[:]):
-        global DEBUG
-        valence_occupation = (rho_VB / self.par.rho_VB_0)
+    def fermi(self, T: float, E_j = None):
+        """
+        Returns the fermi distribution (between 0 and 1) for the energies E_j, which default to self.E_j
+        :param T:
+        :param E_j:
+        :return: relative_occupations
+        """
+        if E_j is None:
+            E_j = self.E_j
 
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
         fermi_distr = np.zeros(E_j.shape)
-        energy_ratios = (E_j - E_f) / T
+        energy_ratios = E_j / T
         calculatable = np.abs(energy_ratios) < 15
         fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
         fermi_distr[energy_ratios < -15] = 1
         fermi_distr[energy_ratios > 15] = 0
         if self.DEBUG:
-            check_bounds(valence_occupation, message='Valence occupation in fermi()')
             check_bounds(fermi_distr, message='Fermi distribution in fermi()')
-        return valence_occupation * fermi_distr  # * self.par.M_Ej[j]
+        return fermi_distr
 
     def calc_thermal_occupations(self, state_vector):
         """
