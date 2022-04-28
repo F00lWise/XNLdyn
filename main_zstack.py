@@ -22,7 +22,7 @@ if __name__ == '__main__':
 
     sim = XNLdyn.XNLsim(PAR, DEBUG=True)
 
-    print(PAR.enax_j)
+    print(PAR.E_j)
     #
 
     #sim_options = dict(t_span=[-40, 60], method='RK45', rtol=1e-6, atol=1e-8, plot=True, return_full_solution=True)
