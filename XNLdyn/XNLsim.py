@@ -75,6 +75,8 @@ class XNLpars:
         ## Expanding the incident photon energies so that they match the tracked energies
         self.lambda_res_Ej = self.I0 = self.t0 = self.tdur_sig = np.zeros(self.N_j, dtype = np.float64)
         self.lambda_res_Ej[self.resonant] = self.lambda_res_Ei
+        self.lambda_res_Ej_inverse = np.zeros(self.lambda_res_Ej.shape, dtype=np.float64)
+        self.lambda_res_Ej_inverse[self.resonant] = 1/self.lambda_res_Ej[self.resonant]
         self.I0[self.resonant] = self.I0_i
         self.t0[self.resonant] = self.t0_i
         self.tdur_sig[self.resonant] = self.tdur_sig_i
@@ -97,7 +99,7 @@ class XNLpars:
         self.R_core_0 = self.M_core  # Initially fully occupied
         self.R_free_0 = 0  # Initially not occupied
         self.E_free_0 = 0  # Initial energy of kinetic electrons, Initally zero
-        self.rho_j_0 = self.m_j * sim.fermi(self.kB * temperature)  # occupied acording to initial temperature
+        self.rho_j_0 = self.m_j * sim.fermi(self.kB * temperature).flatten()  # occupied acording to initial temperature
 
         ## derived from these
         self.R_VB_0 = np.sum(self.rho_j_0)  # Initially occupied up to Fermi Energy
@@ -153,7 +155,11 @@ class XNLpars:
         A call costs 9.7 µs on jupyterhub for two Energies at one time - perhaps this can be
         reduced by using interpolation between a vector in the workspace.
         """
-        return self.I0 * np.exp(-0.5 * ((t - self.t0) / self.tdur_sig) ** 2) * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig)
+        result = self.I0.copy()
+        result[~self.resonant] = 0
+        result[self.resonant] *= np.exp(-0.5 * ((t - self.t0[self.resonant]) / self.tdur_sig[self.resonant]) ** 2)\
+                                 * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig[self.resonant])
+        return result
 
     def make_valence_energy_axis(self, N_j: np.int, min=-6, finemax=4, max=20):
         """
@@ -266,8 +272,8 @@ class XNLsim:
             E_j = self.par.E_j
 
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
-        fermi_distr = np.zeros(E_j.shape)
-        energy_ratios = E_j / T
+        energy_ratios = np.outer(E_j, 1/T) #E_j / T
+        fermi_distr = np.zeros(energy_ratios.shape)
         calculatable = np.abs(energy_ratios) < 15
         fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
         fermi_distr[energy_ratios < -15] = 1
@@ -318,10 +324,10 @@ class XNLsim:
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
-        core_holes = (self.par.M_core - R_core)/ self.par.M_core
-        if self.DEBUG:
-            check_bounds(core_holes, message='Core holes in proc_ch_decay()')
-        return core_holes * rho_j / self.par.tau_CH
+        return (self.par.M_core - R_core) * \
+               (rho_j/self.par.rho_j_0) * \
+               (np.sum(rho_j,axis=1)/self.par.R_VB_0)\
+               / self.par.tau_CH
 
     # Electron Thermalization
     def proc_el_therm(self, rho_j, r_j):
@@ -340,17 +346,15 @@ class XNLsim:
         return mean_free
 
     # Mean energy of electrons in the valence system
-    def mean_valence_energy(self, rho_j, E_free, R_free):
+    def mean_valence_energy(self, rho_j):
         """
         I am not sure yet which electron's energy contributes. My instinct says only valence,
         Martin says also free AND core. Here is valence and Free. Check!
         :param rho_j:
-        :param E_free:
-        :param R_free:
         :return:
         """
-        total_energy = np.sum(self.par.E_j * rho_j) + E_free
-        return total_energy / (np.sum(rho_j, axis=1) + R_free)
+        total_energy = np.sum(self.par.E_j * rho_j, axis=1)
+        return total_energy / (np.sum(rho_j, axis=1))
 
 
     # unpacks state vector and calls all the process functions
@@ -365,7 +369,7 @@ class XNLsim:
         E_free = states[:, 2]
         rho_j = states[:, 3:]
 
-        self.T = self.mean_valence_energy(rho_j, E_free, R_free)
+        self.T = self.mean_valence_energy(rho_j)
         r_j = self.fermi(self.T) * self.par.m_j
 
         self.res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
@@ -374,7 +378,7 @@ class XNLsim:
         self.el_therm = self.proc_el_therm(rho_j, r_j)
         self.el_scatt = self.proc_free_scatt(R_free)
         self.mean_free = self.mean_free_el_energy(R_free, E_free)
-        self.mean_valence = self.mean_valence_energy(rho_j, E_free, R_free)
+        self.mean_valence = self.mean_valence_energy(rho_j)
         #return res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
 
     def rate_N_dz_j_direct(self, N_Ej, states):
@@ -386,7 +390,7 @@ class XNLsim:
         rho_j = states[3:]
         core_occupation = (R_core / self.par.M_core)
         valence_occupation = rho_j/self.par.m_j # relative to the states at that energy
-        return - (core_occupation.T - valence_occupation.T).T * (N_Ej / self.par.lambda_res_Ej)
+        return - (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse)
 
     """
     Rates - time derivatives 
@@ -437,11 +441,10 @@ class XNLsim:
 
         N_Ej_z[0, :] = self.par.pulse_profiles(t)  # momentary photon densities at time t for each photon energy
 
-        js = np.arange(self.par.N_photens)
         # Z-loop for every photon energy
-        N_Ej_z[1, :] = zstep_euler(self, N_Ej_z[0, js], state_vector, 0)  # First step with euler
+        N_Ej_z[1, :] = zstep_euler(self, N_Ej_z[0, :], state_vector, 0)  # First step with euler
         for iz in range(2, self.par.Nsteps_z):
-            N_Ej_z[iz, :] = double_zstep_RK(self, N_Ej_z[iz - 2, js], state_vector, iz - 2)
+            N_Ej_z[iz, :] = double_zstep_RK(self, N_Ej_z[iz - 2, :], state_vector, iz - 2)
 
         return N_Ej_z
 
