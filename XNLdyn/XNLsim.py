@@ -101,7 +101,7 @@ class XNLpars:
 
         ## derived from these
         self.R_VB_0 = np.sum(self.rho_j_0)  # Initially occupied up to Fermi Energy
-        self.enpool_T_0 = self.kB * temperature  # Initial thermal energy of the average valence electron
+        self.T_0 = self.kB * temperature  # Initial thermal energy of the average valence electron
 
         # This vector contains all parameters that are tracked over time
         self.states_per_voxel = 3 + self.N_j  # Just the number of entries for later convenience
@@ -109,14 +109,25 @@ class XNLpars:
                                    self.R_core_0,
                                    self.R_free_0,
                                    self.E_free_0,
-                                   *self.rho_j_0] * self.N_j).reshape(self.N_j, self.states_per_voxel)
+                                   *self.rho_j_0] * self.Nsteps_z).reshape(self.Nsteps_z, self.states_per_voxel)
+
+        # Pre-initialization for efficient memory usage
+        self.res_inter      = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
+        self.nonres_inter   = np.empty((self.Nsteps_z, self.N_j, self.N_photens), dtype = np.float64)
+        self.ch_decay       = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
+        self.el_therm       = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
+        self.el_scatt       = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
+        self.mean_free      = np.empty((self.Nsteps_z), dtype = np.float64)
+        self.mean_valence   = np.empty((self.Nsteps_z), dtype = np.float64)
+        self.state_vector   = np.empty(self.state_vector_0.shape, dtype = np.float64)
+        self.T              = self.T_0
 
     def get_resonant_states(self, M_VB):
         """
         Returns the partial state densities at energies Ej so that sum(m_j) = M_VB
         """
         m_j = np.empty(self.N_j)
-        for j in range(self.E_j):
+        for j in range(self.N_j):
             Emin = self.enax_j_edges[j]
             Emax = self.enax_j_edges[j+1]
 
@@ -252,7 +263,7 @@ class XNLsim:
         :return: relative_occupations
         """
         if E_j is None:
-            E_j = self.E_j
+            E_j = self.par.E_j
 
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
         fermi_distr = np.zeros(E_j.shape)
@@ -303,7 +314,7 @@ class XNLsim:
     def proc_nonres_inter(self, N_Ej, rho_j):
         valence_occupation = rho_j/self.par.R_VB_0 # relative to the number valence states in the ground state
         if self.DEBUG: check_bounds(valence_occupation, 0, 1, message='valence occupation deviation in proc_nonres_inter()')
-        return (valence_occupation.T* N_Ej.T).T / self.par.lambda_nonres # returns j,i
+        return (valence_occupation.T* N_Ej[self.par.resonant].T).T / self.par.lambda_nonres # returns j,i
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
@@ -354,17 +365,17 @@ class XNLsim:
         E_free = states[:, 2]
         rho_j = states[:, 3:]
 
-        T = self.mean_valence_energy(rho_j, E_free, R_free)
-        r_j = self.fermi(T) * self.par.m_j
+        self.T = self.mean_valence_energy(rho_j, E_free, R_free)
+        r_j = self.fermi(self.T) * self.par.m_j
 
-        res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
-        nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
-        ch_decay = self.proc_ch_decay(R_core, rho_j)
-        el_therm = self.proc_el_therm(rho_j, r_j)
-        el_scatt = self.proc_free_scatt(R_free)
-        mean_free = self.mean_free_el_energy(R_free, E_free)
-        mean_valence = self.mean_valence_energy(rho_j, E_free, R_free)
-        return res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
+        self.res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
+        self.nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
+        self.ch_decay = self.proc_ch_decay(R_core, rho_j)
+        self.el_therm = self.proc_el_therm(rho_j, r_j)
+        self.el_scatt = self.proc_free_scatt(R_free)
+        self.mean_free = self.mean_free_el_energy(R_free, E_free)
+        self.mean_valence = self.mean_valence_energy(rho_j, E_free, R_free)
+        #return res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
 
     def rate_N_dz_j_direct(self, N_Ej, states):
         """
@@ -380,21 +391,27 @@ class XNLsim:
     """
     Rates - time derivatives 
     """
-    def rate_j(self, res_inter, nonres_inter, el_therm, ch_decay, rho_j, R_VB):
-        return res_inter - np.sum(nonres_inter, axis = 2) - ch_decay - (rho_j * np.sum(ch_decay, axis = 1)/R_VB) + el_therm
+    def rate_j(self):
+        rho_j = self.state_vector[:, 3:]
+        R_VB = np.sum(rho_j, axis=1)
+        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - self.ch_decay - (rho_j * np.sum(self.ch_decay, axis = 1)/R_VB) + self.el_therm
 
-    def rate_core(self, res_inter, ch_decay):
-        return np.sum(ch_decay, axis=1) - np.sum(res_inter, axis=1)
+    def rate_core(self):
+        return np.sum(self.ch_decay, axis=1) - np.sum(self.res_inter, axis=1)
 
-    def rate_free(self, nonres_inter, ch_decay, el_scatt):
-        return np.sum(nonres_inter, axis=1) + np.sum(ch_decay, axis = 1) - el_scatt
+    def rate_free(self):
+        return np.sum(self.nonres_inter, axis=1) + np.sum(self.ch_decay, axis = 1) - self.el_scatt
 
-    # def rate_E_free(self, R_free):
+    def rate_E_free(self):
         # , nonres_inter, ch_decay, el_scatt, mean_free, mean_valence):
-        # energies_unfolded = np.outer(np.ones(self.par.Nsteps_z), self.par.E_j).T
-        # return np.sum(nonres_inter*(self.par.E_j-), axis = (1,2))
-        #     np.sum(nonres_inter * (energies_unfolded - mean_valence).T, axis=1) + (ch_decay * mean_valence) - (
-        #         el_scatt * mean_free)
+        R_free = self.state_vector[:, 1]
+        E_free = self.state_vector[:, 2]
+        Ei_unfolded = np.outer(np.ones(self.par.Nsteps_z), self.par.E_i).T
+        Ej_unfolded = np.outer(self.par.E_j, self.par.N_photens).T
+
+        return np.sum(self.nonres_inter * (Ei_unfolded - Ej_unfolded), axis = (1,2))\
+               + np.sum(self.ch_decay * self.par.E_j)\
+               - self.el_scatt*E_free/R_free
 
 
     """
@@ -434,34 +451,30 @@ class XNLsim:
 
     def time_derivative(self, t, state_vector_flat):
         # Reshape the state vector into sensible dimension
-        state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
-        check_bounds(state_vector[:, 3], 0, np.inf,
+        self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
+        check_bounds(self.state_vector[:, 3], 0, np.inf,
                      message='Temperature in time_derivative.')  # The temperature must never become negative
         # state_vector[state_vector<self.atol] = 0
         # state_vector[:, 3][state_vector[:, 3]<0] = 0 # Dirty fix since this seems to happen! Look into!
 
-        self.thermal_occupations = self.calc_thermal_occupations(state_vector)
-
         # Calculate photon transmission as save it
-        N_Ej_z = self.z_dependence(t, state_vector)
+        N_Ej_z = self.z_dependence(t, self.state_vector)
 
         # No longer loop through sample depth
-        res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence = \
-            self.calc_processes(N_Ej_z[:, :], state_vector[:, :])
+        #res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence =
+        self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :])
 
-        derivatives = np.empty(state_vector.shape)
-        derivatives[:, 0] = self.rate_CE(res_inter, ch_decay)
-        derivatives[:, 1] = self.rate_free(nonres_inter, ch_decay, el_scatt)
-        derivatives[:, 2] = self.rate_VB(res_inter, nonres_inter, el_therm, ch_decay, el_scatt)
-        derivatives[:, 3] = self.rate_T(el_therm, el_scatt, mean_free, mean_valence)
-        derivatives[:, 4] = self.rate_E_free(nonres_inter, ch_decay, el_scatt, mean_free, mean_valence)
-        derivatives[:, 5:] = self.rate_E_j(res_inter, el_therm)
+        derivatives = np.empty(self.state_vector.shape)
+        derivatives[:, 0] = self.rate_core()
+        derivatives[:, 1] = self.rate_free()
+        derivatives[:, 2] = self.rate_E_free()
+        derivatives[:, 3:] = self.rate_j()
 
         # Debug plotting
         if self.intermediate_plots:
             if np.mod(self.call_counter, 20) == 0:
                 self.plot_z_dependence(N_Ej_z)
-                self.plot_occupancies(state_vector)
+                self.plot_occupancies(self.state_vector)
                 self.plot_derivatives(derivatives)
                 plt.show(block=False)
                 plt.pause(0.1)
