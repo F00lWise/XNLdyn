@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import scipy as sc
 from scipy.integrate import solve_ivp
 import numpy as np
 import warnings
@@ -39,13 +40,15 @@ class XNLpars:
         self.temperature = temperature  # Kelvin
 
         ## Electronic state numbers per atom
-        self.core_states = core_states
-        self.total_valence_states = total_valence_states
+        self.M_core = core_states
+        self.M_VB = total_valence_states
+        self.R_VB_0 = valence_GS_occupation
         self.DoS_shapefile = DoS_shapefile
 
         ## Rates and cross sections
         self.tau_CH = tau_CH
         self.tau_th = tau_th
+        self.tau_free = tau_free
         self.lambda_res_Ei = np.array(lambda_res_Ei)
         self.lambda_nonres = lambda_nonres
 
@@ -73,6 +76,7 @@ class XNLpars:
         # Indizes where E_j == E_i
         self.resonant = np.array([(True if E_j in self.E_i else False) for E_j in self.E_j])
 
+
         ## Expanding the incident photon energies so that they match the tracked energies
         self.lambda_res_Ej = self.I0 = self.t0 = self.tdur_sig = np.zeros(self.N_j, dtype = np.float64)
         self.lambda_res_Ej[self.resonant] = self.lambda_res_Ei
@@ -84,27 +88,26 @@ class XNLpars:
 
         ## Load DoS data
         ld = np.load(self.DoS_shapefile)
-        self.DoSdata = {}
-        self.DoSdata['x'] = ld[:, 0]
-        self.DoSdata['y_atomar'] = ld[:, 1]
-        self.DoSdata['y'] = self.DoSdata['y_atomar']  # * self.M_VB
-        self.DoSdata['osi'] = np.array([np.trapz(self.DoSdata['y'][:i], x=self.DoSdata['x'][:i]) for i in range(
-            len(self.DoSdata['x']))])  # one-sided integral for calculating Fermi energy
+        DoSdata = {}
+        DoSdata['enax'] = ld[:, 0]
+        DoSdata['DoS'] = ld[:, 1]
+        DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < 3], DoSdata['DoS'][DoSdata['enax'] < 3]) # inteprolate to general enaxis, but extend everything beyond +3eV to constant
 
-        ## Multiplicities - these are global for all t and z
-        self.M_core = self.atomic_density * self.core_states
-        self.M_VB = self.atomic_density * self.total_valence_states
-        self.m_j = self.get_resonant_states(self.M_VB)
+        ## mj are normalized by the ground state population
+        self.DoS = self.R_VB_0* DoS_raw / np.trapz(np.append(DoS_raw[self.E_j<=0],np.interp(0,self.E_j,DoS_raw)), np.append(self.E_j[self.E_j<=0],0))
+        self.m_j = np.array([self.get_resonant_states(self.enax_j_edges[i], self.enax_j_edges[i+1]) for i, _ in enumerate(self.E_j)])
+
+        self.FermiSolver = FermiSolver(self, self.m_j)
 
         ## Initial populations
         self.R_core_0 = self.M_core  # Initially fully occupied
         self.R_free_0 = 0  # Initially not occupied
         self.E_free_0 = 0  # Initial energy of kinetic electrons, Initally zero
-        self.rho_j_0 = self.m_j * sim.fermi(self.kB * temperature).flatten()  # occupied acording to initial temperature
+        self.rho_j_0  = self.m_j * self.FermiSolver.fermi(temperature, 0) # occupied acording to initial temperature
 
         ## derived from these
         self.R_VB_0 = np.sum(self.rho_j_0)  # Initially occupied up to Fermi Energy
-        self.T_0 = self.kB * temperature  # Initial thermal energy of the average valence electron
+        self.T_0 = temperature  # Initial thermal energy of the average valence electron
 
         # This vector contains all parameters that are tracked over time
         self.states_per_voxel = 3 + self.N_j  # Just the number of entries for later convenience
@@ -113,6 +116,11 @@ class XNLpars:
                                    self.R_free_0,
                                    self.E_free_0,
                                    *self.rho_j_0] * self.Nsteps_z).reshape(self.Nsteps_z, self.states_per_voxel)
+
+        # This is a constant matrix needed in rate_free()
+        self.energy_differences = np.zeros((self.Nsteps_z, self.N_j, self.N_photens))
+        for i in range(self.N_photens):
+            self.energy_differences[:,:,i] = (self.E_j - self.E_i[i])
 
         # Pre-initialization for efficient memory usage
         self.res_inter      = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
@@ -124,31 +132,19 @@ class XNLpars:
         self.mean_valence   = np.empty((self.Nsteps_z), dtype = np.float64)
         self.state_vector   = np.empty(self.state_vector_0.shape, dtype = np.float64)
         self.T              = self.T_0
+        self.target_distributions = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
 
-    def get_resonant_states(self, M_VB):
+    def get_resonant_states(self, Emin, Emax, npoints=10):
         """
-        Returns the partial state densities at energies Ej so that sum(m_j) = M_VB
+        Returns the number of states resonant to the photon energy E,
+        assuming a certain resonant width.
+        The DoS data stored in the file should be normalized to unity.
+        A re-sampling is done to prevent any funny businness due to the sampling density of the DoS.
         """
-        m_j = np.empty(self.N_j)
-        for j in range(self.N_j):
-            Emin = self.enax_j_edges[j]
-            Emax = self.enax_j_edges[j+1]
 
-            X = np.linspace(Emin, Emax, 10)
-            Y = np.interp(X, self.DoSdata['x'], self.DoSdata['y'])
-
-            m_j[j] = np.trapz(y=Y, x=X)
-        m_j = m_j / np.sum(m_j) # make sure its normalized to the sum
-        m_j = m_j * M_VB
-        return m_j
-
-    # def get_initial_valence_occupation(self):
-    #     """
-    #     This one just calculates the initial valence state population
-    #     """
-    #     x = self.DoSdata['x']
-    #     y = self.DoSdata['y']
-    #     return np.trapz(y=y[x < 0], x=x[x < 0])
+        X = np.linspace(Emin, Emax, npoints)
+        Y = np.interp(X, self.E_j, self.DoS)
+        return np.trapz(y=Y, x=X)
 
     def pulse_profiles(self, t):
         """
@@ -156,13 +152,13 @@ class XNLpars:
         A call costs 9.7 µs on jupyterhub for two Energies at one time - perhaps this can be
         reduced by using interpolation between a vector in the workspace.
         """
-        result = self.I0.copy()
+        result = self.I0.copy()/self.atomic_density # normalize from photons/nm² to (photons nm)/ atom
         result[~self.resonant] = 0
         result[self.resonant] *= np.exp(-0.5 * ((t - self.t0[self.resonant]) / self.tdur_sig[self.resonant]) ** 2)\
                                  * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig[self.resonant])
         return result
 
-    def make_valence_energy_axis(self, N_j: np.int, min=-6, finemax=4, max=20):
+    def make_valence_energy_axis(self, N_j: np.int, min=-6, finemax=10, max=50):
         """
         Creates an energy axis for the valence band, namely
             self.E_j
@@ -211,21 +207,31 @@ class FermiSolver:
     """
     This class finds the target "thermal equilibrium" electron distribution in the valence band for any given distribution or a set of inner energy and population
     """
-    def __init__(self, enax, DoS, DEBUG=False):
+    def __init__(self, par, DoS,  DEBUG=False):
         self.par0 = lmfit.Parameters()
         self.par0.add('T', value=350, min=300, max=1e6)
         self.par0.add('Ef', value=1, min=-9, max=20)
-        self.enax = enax
+        self.par = par
+        self.enax = par.E_j
         self.DoS = DoS
         self.kB = 8.617333262145e-5
         self.DEBUG = DEBUG
 
+
     def fermi(self, T: float, Ef: float):
+        # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
         energy_ratios = (self.enax - Ef) / (T * self.kB)
-        return 1 / (np.exp(energy_ratios) + 1)
+        fermi_distr = np.zeros(energy_ratios.shape)
+        calculatable = np.abs(energy_ratios) < 15
+        fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
+        fermi_distr[energy_ratios < -15] = 1
+        fermi_distr[energy_ratios > 15] = 0
+        if self.DEBUG:
+            check_bounds(fermi_distr, message='Fermi distribution in fermi()')
+        return fermi_distr
 
     def inner_energy(self, occupation):
-        return np.trapz(self.enax * occupation, self.enax)
+        return np.sum(self.enax*occupation)#np.trapz(self.enax * occupation, self.enax)
 
     def optimizable(self, pars, U_target, R_target):
         """
@@ -235,9 +241,9 @@ class FermiSolver:
         vals = pars.valuesdict()
         T = vals['T']
         Ef = vals['Ef']
-        occ = self.DoS * self.fermi(T, Ef)
+        occ = self.DoS * self.fermi(T, Ef)* (self.par.enax_j_edges[1:]-self.par.enax_j_edges[:-1])
         U = self.inner_energy(occ)
-        R = np.trapz(occ, self.enax)
+        R = np.sum(occ)#np.trapz(occ, self.enax)
         ur = np.abs(U - U_target)
         rr = np.abs(R - R_target)
         return ur, rr
@@ -276,7 +282,7 @@ class FermiSolver:
         Calculates a target distribution for a specific incident distribution by optimization of Ef and T
         """
         U_is = self.inner_energy(momentary_distribution)
-        R_is = np.trapz(momentary_distribution, x=self.enax)
+        R_is = np.sum(momentary_distribution)#np.trapz(momentary_distribution, x=self.enax)
 
         T, Ef = self.solve(U_is, R_is)
         if self.DEBUG: print(U_is, R_is, T, Ef)
@@ -285,13 +291,14 @@ class FermiSolver:
     def generate_lookup_tables(self, Urange=np.linspace(-25, 25, 82), Rrange=np.linspace(0, 20, 80), save=True):
         print(
             f'Starting to generate lookup tables for U between {np.min(Urange):.1f} to {np.max(Urange):.1f} and R between {np.min(Rrange):.1f} and {np.max(Rrange):.1f}')
-
+        self.Urange = Urange
+        self.Rrange = Rrange
         self.precalc_temperatures = np.empty((Urange.shape[0], Rrange.shape[0]))
         self.precalc_fermi_energies = np.empty((Urange.shape[0], Rrange.shape[0]))
 
         for iu, u in enumerate(Urange):
             for ir, r in enumerate(Rrange):
-                self.precalc_temperatures[iu, ir], self.precalc_fermi_energies[iu, ir] = solver.solve(u, r)
+                self.precalc_temperatures[iu, ir], self.precalc_fermi_energies[iu, ir] = self.solve(u, r)
 
         Ugrid, Rgrid = np.meshgrid(Urange, Rrange)
         self.Upoints = Ugrid.T.flatten()
@@ -302,7 +309,7 @@ class FermiSolver:
         if save:
             savename = 'fermi_lookup_table.npz'
             print(f'Saving at ./{savename}')
-            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints,
+            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints, Rrange=Rrange, Urange=Urange,
                      temp_points=self.precalc_temperatures_points, ferm_points=self.precalc_fermi_energies_points)
         self.Rmin = np.min(Rrange)
         self.Rmax = np.max(Rrange)
@@ -316,12 +323,14 @@ class FermiSolver:
             raise OSError('Lookup table file not found.')
         self.Upoints = ld['Upoints']
         self.Rpoints = ld['Rpoints']
+        self.Urange = ld['Urange']
+        self.Rrange = ld['Rrange']
         self.precalc_temperatures_points = ld['temp_points']
         self.precalc_fermi_energies_points = ld['ferm_points']
-        self.Rmin = np.min(self.Rpoints)
-        self.Rmax = np.max(self.Rpoints)
-        self.Umin = np.min(self.Upoints)
-        self.Umax = np.max(self.Upoints)
+        self.Rmin = np.min(self.Rrange)
+        self.Rmax = np.max(self.Rrange)
+        self.Umin = np.min(self.Urange)
+        self.Umax = np.max(self.Urange)
         print('Loaded lookup table successfully.')
 
     def lookup_TEf_from_UR(self, U_is, R_is):
@@ -338,7 +347,15 @@ class FermiSolver:
                                      method='nearest')
 
         if np.isnan(T) or np.isnan(Ef):
-            raise ValueError(f'Could not find a comination of Ef and T for R={R_is:.f} and U={U_is:.f}')
+            print(f'Lookup failed. Trying direct solve for R={R_is:.1f} and U={U_is:.1f}')
+            T, Ef = self.solve(U_is, R_is) # try direct solving
+            self.Upoints = np.append(self.Upoints,U_is)
+            self.Rpoints = np.append(self.Rpoints,R_is)
+            self.precalc_temperatures_points = np.append(self.precalc_temperatures_points,T)
+            self.precalc_fermi_energies_points = np.append(self.precalc_fermi_energies_points,Ef)
+            if np.isnan(T) or np.isnan(Ef):
+                raise ValueError(f'Could not find a combination of Ef and T for R={R_is:.1f} and U={U_is:.1f}')
+            print(f'Direct solve worked and lead to: T={T:.1f} and Ef={Ef:.1f}')
         return T, Ef
 
     def lookup_target_distribution(self, momentary_distribution):
@@ -346,34 +363,79 @@ class FermiSolver:
         Calculates a target distribution for a specific incident distribution by optimization of Ef and T
         """
         U_is = self.inner_energy(momentary_distribution)
-        R_is = np.trapz(momentary_distribution, x=self.enax)
+        R_is = np.sum(momentary_distribution)#np.trapz(momentary_distribution, x=self.enax)
 
         T, Ef = self.lookup_TEf_from_UR(U_is, R_is)
 
         if self.DEBUG: print(U_is, R_is, T, Ef)
         return self.DoS * self.fermi(T, Ef)
 
+    def plot_lookup_tables(self):
+        Ugrid, Rgrid = np.meshgrid(self.Urange, self.Rrange)
+        temperatures_gr = sc.interpolate.griddata((self.Upoints, self.Rpoints),
+                                                  self.precalc_temperatures_points,(Ugrid, Rgrid), method = 'nearest')
+        fermi_energies_gr = sc.interpolate.griddata((self.Upoints, self.Rpoints),
+                                                    self.precalc_fermi_energies_points,(Ugrid, Rgrid), method = 'nearest')
+
+        fig = plt.figure(figsize = (8,4))
+
+        ax1 = fig.add_subplot(1, 2, 1)
+
+        pl1 = ax1.pcolormesh(Ugrid, Rgrid, temperatures_gr, cmap=plt.cm.coolwarm, vmin = 300,vmax = 1e5,
+                               linewidth=0)
+        fig.colorbar(pl1)#, shrink=0.5, aspect=5
+        ax1.set_title('Electron temperature (K)')
+        ax1.set_ylabel('Valence electrons per atom')
+        ax1.set_xlabel('Inner energy per atom (eV)')
+
+        ax2 = fig.add_subplot(1, 2, 2)
+
+
+        pl2 = ax2.pcolormesh(Ugrid, Rgrid, fermi_energies_gr, cmap=plt.cm.seismic, vmin = -20, vmax = 20,
+                               linewidth=0)
+        fig.colorbar(pl2)#, shrink=0.5, aspect=5
+        ax2.set_title('Fermi energy shift (eV)')
+        ax2.set_ylabel('Valence electrons per atom')
+        ax2.set_xlabel('Inner energy per atom (eV)')
+        plt.tight_layout()
+
+        plt.pause(0.1)
+        plt.show(block = False)
 ## Main Simulation
 
 class XNLsim:
-    def __init__(self, par, DEBUG=False, atol=1e-18):
+    def __init__(self, par, DEBUG=False, load_tables=True):
         self.DEBUG = DEBUG
         self.intermediate_plots = False
         self.par = par
         self.par.make_derived_params(self)
 
+
+        if load_tables:
+            try:
+                self.par.FermiSolver.load_lookup_tables()
+            except OSError:
+                while True:
+                    YN = input('Could not load table. Generate new ones ? (Y/N)')
+                    if YN in ['y','Y']:
+                        self.par.FermiSolver.generate_lookup_tables()
+                        break
+                    elif YN in ['n','N']:
+                        break
+                    else:
+                        print('Invalid answer.')
+        else:
+            self.par.FermiSolver.generate_lookup_tables()
+
         # initiate storing intermediate results
         self.call_counter = 0
         self.thermal_occupations = None
 
-        # Tolerance - variables are rounded to this value if they become very small to avoid float underfolows
-        # self.atol = atol # I think this might not be needed
+    ###################
+    ### Processes
+    ###################
 
-    """
-    Processes
-    """
-
-    def run(self, t_span, method, rtol, atol, plot=False, return_full_solution=False, set_debug=False):
+    def run(self, t_span, method, rtol, atol, plot=False, return_full_solution=False):
         """
         Run the simulation once for a z-stack
 
@@ -394,10 +456,21 @@ class XNLsim:
         ### Since they weren't saved, calculate transmission again
         sol_photon_densities = np.zeros((self.par.Nsteps_z, self.par.N_photens, len(sol.t)))
         for it, t in enumerate(sol.t):
-            sol_photon_densities[:, :, it] = self.z_dependence(t, soly[:, :, it])
+            sol_photon_densities[:, :, it] = self.z_dependence(t, soly[:, :, it])[:,self.par.resonant]
 
         incident_pulse_energies = np.trapz(sol_photon_densities[0, :, :], x=sol.t)
         transmitted_pulse_energies = np.trapz(sol_photon_densities[-1, :, :], x=sol.t)
+
+        ### Also reconstruct the temperatures and Fermi energies
+        sol.temperatures = np.zeros((len(sol.t),self.par.Nsteps_z))
+        sol.fermi_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
+        sol_rho_j = soly[:, 3:, :]
+        sol_VB = np.sum(sol_rho_j,1)
+        for it,t in enumerate(sol.t):
+            for iz in range(self.par.Nsteps_z):
+                U = np.sum(sol_rho_j[iz,:,it]*self.par.E_j)#np.trapz(sol_rho_j[iz,:,it]*self.par.E_j, x = self.par.E_j)
+                R = sol_VB[iz,it]
+                sol.temperatures[it,iz], sol.fermi_energies[it,iz] = self.par.FermiSolver.lookup_TEf_from_UR(U,R)
 
         if plot:
             self.plot_results(sol, sol_photon_densities)
@@ -419,7 +492,7 @@ class XNLsim:
             E_j = self.par.E_j
 
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
-        energy_ratios = np.outer(E_j, 1/T) #E_j / T
+        energy_ratios = np.outer(E_j, 1/(self.par.kB * T)) #E_j / T
         fermi_distr = np.zeros(energy_ratios.shape)
         calculatable = np.abs(energy_ratios) < 15
         fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
@@ -456,29 +529,36 @@ class XNLsim:
 
     # Resonant interaction
     def proc_res_inter_Ej(self, N_Ej, R_core, rho_j):
-        core_occupation = (R_core / self.par.M_core)
+        core_occupation = np.outer((R_core / self.par.M_core), np.ones(self.par.N_j))
         valence_occupation = rho_j/self.par.m_j # relative to the states at that energy
+        gs_intensity = np.zeros(valence_occupation.shape)
+        gs_intensity[:,self.par.resonant] =  N_Ej[:,self.par.resonant] / self.par.lambda_res_Ei
         if self.DEBUG:
             check_bounds(core_occupation, message='Valence occupation in proc_res_inter_Ej()')
             check_bounds(valence_occupation, message='Valence occupation in proc_res_inter_Ej()')
-        return np.outer((core_occupation - valence_occupation), (N_Ej / self.par.lambda_res_Ej)) # returns j,i
+        return (core_occupation - valence_occupation) * gs_intensity # returns j,i
 
     # Nonresonant interaction
     def proc_nonres_inter(self, N_Ej, rho_j):
         valence_occupation = rho_j/self.par.R_VB_0 # relative to the number valence states in the ground state
         if self.DEBUG: check_bounds(valence_occupation, 0, 1, message='valence occupation deviation in proc_nonres_inter()')
-        return (valence_occupation.T* N_Ej[self.par.resonant].T).T / self.par.lambda_nonres # returns j,i
+        #TODO: Somehow avoid this slow loop
+        result = np.empty((self.par.Nsteps_z,self.par.N_j, self.par.N_photens))
+        for iz in range(self.par.Nsteps_z):
+            result[iz] = np.outer(valence_occupation[iz], N_Ej[iz, self.par.resonant])
+        return result / self.par.lambda_nonres # returns z, j,i
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
-        return (self.par.M_core - R_core) * \
-               (rho_j/self.par.rho_j_0) * \
-               (np.sum(rho_j,axis=1)/self.par.R_VB_0)\
-               / self.par.tau_CH
-
+        core_holes = (self.par.M_core - R_core) # z
+        R_VB = np.sum(rho_j,axis=1)
+        valence_resonant_occupation = rho_j/(self.par.m_j) #rho_j_0 # z, j
+        valence_resonant_occupation_share = (valence_resonant_occupation.T/R_VB).T
+        valence_total_occupation_change = R_VB/self.par.R_VB_0
+        return (core_holes.T * valence_resonant_occupation_share.T * valence_total_occupation_change).T / self.par.tau_CH
     # Electron Thermalization
     def proc_el_therm(self, rho_j, r_j):
-        return (r_j - rho_j) / self.par.tau_therm
+        return (r_j - rho_j) / self.par.tau_th
 
     # Free electron scattering
     def proc_free_scatt(self, R_free):
@@ -505,7 +585,7 @@ class XNLsim:
 
 
     # unpacks state vector and calls all the process functions
-    def calc_processes(self, N_Ej, states):
+    def calc_processes(self, N_Ej, states, r_j):
         """
         Calculates all the processes for all z
         dimeninality of each j-resolved variable is [iz,j]
@@ -515,9 +595,6 @@ class XNLsim:
         R_free = states[:, 1]
         E_free = states[:, 2]
         rho_j = states[:, 3:]
-
-        self.T = self.mean_valence_energy(rho_j)
-        r_j = self.fermi(self.T) * self.par.m_j
 
         self.res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
         self.nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
@@ -539,35 +616,43 @@ class XNLsim:
         valence_occupation = rho_j/self.par.m_j # relative to the states at that energy
         return - (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse)
 
-    """
-    Rates - time derivatives 
-    """
+    ############################
+    ### Rates - time derivatives
+    ############################
     def rate_j(self):
         rho_j = self.state_vector[:, 3:]
         R_VB = np.sum(rho_j, axis=1)
-        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - self.ch_decay - (rho_j * np.sum(self.ch_decay, axis = 1)/R_VB) + self.el_therm
+        direct_augers = self.ch_decay
+        indirect_augers = ((rho_j * np.outer(np.sum(self.ch_decay, axis = 1),np.ones(self.par.N_j))).T/R_VB).T
+        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers - indirect_augers + self.el_therm
 
     def rate_core(self):
         return np.sum(self.ch_decay, axis=1) - np.sum(self.res_inter, axis=1)
 
     def rate_free(self):
-        return np.sum(self.nonres_inter, axis=1) + np.sum(self.ch_decay, axis = 1) - self.el_scatt
+        return np.sum(self.nonres_inter, axis=(1,2)) + np.sum(self.ch_decay, axis = 1) - self.el_scatt
 
     def rate_E_free(self):
         # , nonres_inter, ch_decay, el_scatt, mean_free, mean_valence):
+
+        #nonres_inter = self.nonres_inter
+        #ch_decay = self.ch_decay
+        #scatt = self.el_scatt
+
         R_free = self.state_vector[:, 1]
         E_free = self.state_vector[:, 2]
-        Ei_unfolded = np.outer(np.ones(self.par.Nsteps_z), self.par.E_i).T
-        Ej_unfolded = np.outer(self.par.E_j, self.par.N_photens).T
 
-        return np.sum(self.nonres_inter * (Ei_unfolded - Ej_unfolded), axis = (1,2))\
-               + np.sum(self.ch_decay * self.par.E_j)\
-               - self.el_scatt*E_free/R_free
+        result = np.zeros(self.par.Nsteps_z)
+        interesting = R_free > 0
+        result[interesting] = np.sum(self.nonres_inter[interesting] * self.par.energy_differences[interesting], axis = (1,2))\
+               + np.sum(self.ch_decay * self.par.E_j, axis = 1)[interesting]\
+               - self.el_scatt[interesting]*E_free[interesting]/R_free[interesting]
+        return result
 
 
-    """
-    Propagation of photons through the sample
-    """
+    ###################
+    ### Propagation of photons through the sample
+    ###################
 
     def z_dependence(self, t, state_vector):
         def zstep_euler(self, N, state_vector, iz):
@@ -595,24 +680,29 @@ class XNLsim:
 
         return N_Ej_z
 
-    """
-    Main differential describing the time evolution of voxels
-    """
+    ##########################################################
+    ### Main differential describing the time evolution of voxels
+    ##########################################################
 
     def time_derivative(self, t, state_vector_flat):
         # Reshape the state vector into sensible dimension
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
         check_bounds(self.state_vector[:, 3], 0, np.inf,
                      message='Temperature in time_derivative.')  # The temperature must never become negative
-        # state_vector[state_vector<self.atol] = 0
-        # state_vector[:, 3][state_vector[:, 3]<0] = 0 # Dirty fix since this seems to happen! Look into!
+
+        # Determine thermalized distributions
+        for iz, z in enumerate(self.par.zaxis):
+            current_rho_j = self.state_vector[iz,3:]
+            R = np.sum(current_rho_j)
+            U = np.sum(current_rho_j*self.par.E_j)#np.trapz(current_rho_j*self.par.E_j, x = self.par.E_j)
+            self.par.target_distributions[iz,:] = self.par.FermiSolver.lookup_target_distribution(current_rho_j)
 
         # Calculate photon transmission as save it
         N_Ej_z = self.z_dependence(t, self.state_vector)
 
         # No longer loop through sample depth
         #res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence =
-        self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :])
+        self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :], self.par.target_distributions)
 
         derivatives = np.empty(self.state_vector.shape)
         derivatives[:, 0] = self.rate_core()
@@ -632,6 +722,9 @@ class XNLsim:
         self.call_counter += 1
         return derivatives.flatten()
 
+    ##########################################################
+    ### Auxiliary plotting functions
+    ##########################################################
     def plot_z_dependence(self, N_Ej_z):
         if not 'figure_z' in dir(self):
             self.figure_z = plt.figure()
@@ -654,9 +747,9 @@ class XNLsim:
             self.axis_occ.clear()
         plt.plot(self.par.zaxis, (state_vector[:, 0] / self.par.M_CE) - 1, label='Core occupation variation')
         plt.plot(self.par.zaxis, state_vector[:, 1], label='Free electrons')
-        plt.plot(self.par.zaxis, (state_vector[:, 2] - self.par.rho_VB_0) / self.par.M_VB,
+        plt.plot(self.par.zaxis, (state_vector[:, 2] - self.par.R_VB_0) / self.par.M_VB,
                  label='VB occupation variation')
-        plt.plot(self.par.zaxis, state_vector[:, 3] - (300 * self.par.kB), label='T')
+        plt.plot(self.par.zaxis, state_vector[:, 3] - 300, label='T')
         plt.plot(self.par.zaxis, state_vector[:, 4], label='E')
         plt.plot(self.par.zaxis, state_vector[:, 5:] / self.par.M_Ej, label='Resonant occupations')
         plt.legend()
@@ -703,22 +796,23 @@ class XNLsim:
         soly = sol.y.reshape((PAR.Nsteps_z, PAR.states_per_voxel, len(sol.t)))
         sol_core = soly[:, 0, :]
         sol_free = soly[:, 1, :]
-        sol_VB = soly[:, 2, :]
-        sol_T = soly[:, 3, :]
-        sol_Efree = soly[:, 4, :]
-        sol_Ej = soly[:, 5:, :]
+        sol_Efree = soly[:, 2, :]
+        sol_rho_j = soly[:, 3:, :]
+        sol_VB = np.sum(sol_rho_j,1)
+
+
 
         fig, axes = plt.subplots(2, 2, figsize=(8, 8))
         plt.sca(axes[0, 0])
         plt.title('State occupation changes')
-        plt.plot(sol.t, 1 - (np.mean(sol_core, 0) / PAR.M_CE), label='Core holes')
-        plt.plot(sol.t, 1 - (sol_core[0] / PAR.M_CE), label='Core holes [0]')
+        plt.plot(sol.t, 1 - (np.mean(sol_core, 0) / PAR.M_core), label='Core holes')
+        plt.plot(sol.t, 1 - (sol_core[0] / PAR.M_core), label='Core holes @surface')
 
-        plt.plot(sol.t, (np.mean(sol_VB, 0) - PAR.rho_VB_0) / PAR.M_VB, label='Valence band occupation')
-        plt.plot(sol.t, (sol_VB[0] - PAR.rho_VB_0) / PAR.M_VB, label='Valence @surface')
+        plt.plot(sol.t, (np.mean(sol_VB, 0) - PAR.R_VB_0) / PAR.M_VB, label='Valence band occupation')
+        plt.plot(sol.t, (sol_VB[0] - PAR.R_VB_0) / PAR.M_VB, label='Valence @surface')
 
-        plt.plot(sol.t, np.mean(sol_Ej, 0).T / PAR.M_Ej,
-                 label=[f'{PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in range(PAR.N_photens)])
+        plt.plot(sol.t, np.mean(sol_rho_j, 0).T / PAR.m_j,
+                 label=[f'{PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in range(PAR.N_j)])
 
         plt.ylabel('Occupation')
         plt.xlabel('t (fs)')
@@ -736,10 +830,10 @@ class XNLsim:
 
         plt.sca(axes[1, 0])
         plt.title('Energies Averaged over z')
-        plt.plot(sol.t, np.mean(sol_T, 0), label='Valence Thermal Energy')
-        plt.plot(sol.t, np.mean(sol_Efree, 0), label='Free Electron Energy')
-        plt.plot(sol.t, sol_T[0], label='Valence @ Surface')
-        plt.plot(sol.t, sol_Efree[0], label='Free surface')
+        plt.plot(sol.t, np.mean(sol.temperatures, 0), label='Temperature')
+        plt.plot(sol.t, np.mean(sol.fermi_energies, 0), label='Fermi level shift')
+        plt.plot(sol.t, sol.temperatures[0], label='Temperature @ Surface')
+        plt.plot(sol.t, sol_Efree[0], label='Fermi level shift @surface')
         plt.ylabel('E (eV)')
         plt.xlabel('t (fs)')
         plt.legend()

@@ -11,6 +11,7 @@ temperature = 300 # Kelvin
 # Electronic state numbers per atom
 core_states = 2
 total_valence_states = 10
+valence_GS_occupation = 8
 
 DoS_shapefile = './DoSdata.npy'
 
@@ -18,6 +19,7 @@ DoS_shapefile = './DoSdata.npy'
 
 tau_CH = 4       # Core hole lifetime / fs
 tau_th = 0.5     # Redistribution time of electrons in the VB / fs
+tau_free = 0.5   # Free electron lifetime
 lambda_res_Ei = (10, 9)  # Absorptions length of resonant photon energies / nm
 lambda_nonres = 500    # Absorption length of non-resonant photons, assumed equal for all / nm
 
