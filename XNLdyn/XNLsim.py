@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import solve_ivp
 import numpy as np
 import warnings
+import lmfit
 
 # Import all the parameters defined in the params file and processed in process_params
 from .params import *
@@ -205,6 +206,152 @@ class XNLpars:
 
         return enax_j, edgepoints(enax_j)
 
+
+class FermiSolver:
+    """
+    This class finds the target "thermal equilibrium" electron distribution in the valence band for any given distribution or a set of inner energy and population
+    """
+    def __init__(self, enax, DoS, DEBUG=False):
+        self.par0 = lmfit.Parameters()
+        self.par0.add('T', value=350, min=300, max=1e6)
+        self.par0.add('Ef', value=1, min=-9, max=20)
+        self.enax = enax
+        self.DoS = DoS
+        self.kB = 8.617333262145e-5
+        self.DEBUG = DEBUG
+
+    def fermi(self, T: float, Ef: float):
+        energy_ratios = (self.enax - Ef) / (T * self.kB)
+        return 1 / (np.exp(energy_ratios) + 1)
+
+    def inner_energy(self, occupation):
+        return np.trapz(self.enax * occupation, self.enax)
+
+    def optimizable(self, pars, U_target, R_target):
+        """
+        This is a loss function to minimize to find a combination of Fermi energy and temperature for
+        a given inner energy and valence band occupation.
+        """
+        vals = pars.valuesdict()
+        T = vals['T']
+        Ef = vals['Ef']
+        occ = self.DoS * self.fermi(T, Ef)
+        U = self.inner_energy(occ)
+        R = np.trapz(occ, self.enax)
+        ur = np.abs(U - U_target)
+        rr = np.abs(R - R_target)
+        return ur, rr
+
+    def solve(self, U, R):
+        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R), method='nelder')
+        ## Check for large residuals
+        res_U, res_R = res.residual
+        if res_U > 0.1:
+            if self.DEBUG: print(f'Residual in U remained significant ({res_U}) Setting to NaN')
+            return np.nan, np.nan
+        if res_R > 0.1:
+            if self.DEBUG: print(f'Residual in R remained significant ({res_R}) Setting to NaN')
+            return np.nan, np.nan
+        ## Check for running into parameter limits
+        if res.params['T'].value < res.params['T'].min + 1e-6:
+            if self.DEBUG: print('Minimum T reached!')
+            return np.nan, np.nan
+        if res.params['T'].value > res.params['T'].max - 1e-6:
+            if self.DEBUG: print('Maximum T reached!')
+            return np.nan, np.nan
+        if res.params['Ef'].value < res.params['Ef'].min + 1e-6:
+            if self.DEBUG: print('Minimum Ef reached!')
+            return np.nan, np.nan
+        if res.params['Ef'].value > res.params['Ef'].max - 1e-6:
+            if self.DEBUG: print('Maximum Ef reached!')
+            return np.nan, np.nan
+        if not res.success:
+            raise RuntimeError('No solution found!')
+        else:
+            self.par0 = res.params  # pass solution for the next iteration
+            return res.params['T'].value, res.params['Ef'].value
+
+    def solve_target_distribution(self, momentary_distribution):
+        """
+        Calculates a target distribution for a specific incident distribution by optimization of Ef and T
+        """
+        U_is = self.inner_energy(momentary_distribution)
+        R_is = np.trapz(momentary_distribution, x=self.enax)
+
+        T, Ef = self.solve(U_is, R_is)
+        if self.DEBUG: print(U_is, R_is, T, Ef)
+        return self.DoS * self.fermi(T, Ef)
+
+    def generate_lookup_tables(self, Urange=np.linspace(-25, 25, 82), Rrange=np.linspace(0, 20, 80), save=True):
+        print(
+            f'Starting to generate lookup tables for U between {np.min(Urange):.1f} to {np.max(Urange):.1f} and R between {np.min(Rrange):.1f} and {np.max(Rrange):.1f}')
+
+        self.precalc_temperatures = np.empty((Urange.shape[0], Rrange.shape[0]))
+        self.precalc_fermi_energies = np.empty((Urange.shape[0], Rrange.shape[0]))
+
+        for iu, u in enumerate(Urange):
+            for ir, r in enumerate(Rrange):
+                self.precalc_temperatures[iu, ir], self.precalc_fermi_energies[iu, ir] = solver.solve(u, r)
+
+        Ugrid, Rgrid = np.meshgrid(Urange, Rrange)
+        self.Upoints = Ugrid.T.flatten()
+        self.Rpoints = Rgrid.T.flatten()
+        self.precalc_temperatures_points = self.precalc_temperatures.flatten()
+        self.precalc_fermi_energies_points = self.precalc_fermi_energies.flatten()
+        print('Lookup tables generated.')
+        if save:
+            savename = 'fermi_lookup_table.npz'
+            print(f'Saving at ./{savename}')
+            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints,
+                     temp_points=self.precalc_temperatures_points, ferm_points=self.precalc_fermi_energies_points)
+        self.Rmin = np.min(Rrange)
+        self.Rmax = np.max(Rrange)
+        self.Umin = np.min(Urange)
+        self.Umax = np.max(Urange)
+
+    def load_lookup_tables(self):
+        try:
+            ld = np.load('./fermi_lookup_table.npz')
+        except:
+            raise OSError('Lookup table file not found.')
+        self.Upoints = ld['Upoints']
+        self.Rpoints = ld['Rpoints']
+        self.precalc_temperatures_points = ld['temp_points']
+        self.precalc_fermi_energies_points = ld['ferm_points']
+        self.Rmin = np.min(self.Rpoints)
+        self.Rmax = np.max(self.Rpoints)
+        self.Umin = np.min(self.Upoints)
+        self.Umax = np.max(self.Upoints)
+        print('Loaded lookup table successfully.')
+
+    def lookup_TEf_from_UR(self, U_is, R_is):
+        if not (self.Umin < U_is < self.Umax):
+            raise ValueError(f'U: {U_is} out of bounds of lookup table')
+        if not (self.Rmin < R_is < self.Rmax):
+            raise ValueError(f'R: {R_is} out of bounds of lookup table')
+
+        if self.DEBUG: print(U_is, R_is)
+
+        T = sc.interpolate.griddata((self.Upoints, self.Rpoints), self.precalc_temperatures_points, (U_is, R_is),
+                                    method='nearest')
+        Ef = sc.interpolate.griddata((self.Upoints, self.Rpoints), self.precalc_fermi_energies_points, (U_is, R_is),
+                                     method='nearest')
+
+        if np.isnan(T) or np.isnan(Ef):
+            raise ValueError(f'Could not find a comination of Ef and T for R={R_is:.f} and U={U_is:.f}')
+        return T, Ef
+
+    def lookup_target_distribution(self, momentary_distribution):
+        """
+        Calculates a target distribution for a specific incident distribution by optimization of Ef and T
+        """
+        U_is = self.inner_energy(momentary_distribution)
+        R_is = np.trapz(momentary_distribution, x=self.enax)
+
+        T, Ef = self.lookup_TEf_from_UR(U_is, R_is)
+
+        if self.DEBUG: print(U_is, R_is, T, Ef)
+        return self.DoS * self.fermi(T, Ef)
 
 ## Main Simulation
 
