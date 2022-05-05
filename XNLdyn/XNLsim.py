@@ -94,7 +94,9 @@ class XNLpars:
         DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < 3], DoSdata['DoS'][DoSdata['enax'] < 3]) # inteprolate to general enaxis, but extend everything beyond +3eV to constant
 
         ## mj are normalized by the ground state population
-        self.DoS = self.R_VB_0* DoS_raw / np.trapz(np.append(DoS_raw[self.E_j<=0],np.interp(0,self.E_j,DoS_raw)), np.append(self.E_j[self.E_j<=0],0))
+        # Best way to do it: self.DoS = self.R_VB_0* DoS_raw / np.trapz(np.append(DoS_raw[self.E_j<=0],np.interp(0,self.E_j,DoS_raw)), np.append(self.E_j[self.E_j<=0],0))
+        # Faster and consistent way to do it:
+        self.DoS = self.R_VB_0*DoS_raw * np.trapz(DoS_raw[self.E_j<=0], self.E_j[self.E_j<=0])
         self.m_j = np.array([self.get_resonant_states(self.enax_j_edges[i], self.enax_j_edges[i+1]) for i, _ in enumerate(self.E_j)])
 
         self.FermiSolver = FermiSolver(self, self.m_j)
@@ -158,49 +160,65 @@ class XNLpars:
                                  * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig[self.resonant])
         return result
 
-    def make_valence_energy_axis(self, N_j: np.int, min=-6, finemax=10, max=50):
-        """
-        Creates an energy axis for the valence band, namely
-            self.E_j
-        and its edgepoints
-            self.enax_j_edges
-        Energies are relative to the fermi-level. 3/4 of all points fall into the range (min, finemax)
-        Makes sure that the energies E_i correspond to a point in E_j and
-        drops the closest points to keep the number N_j.
-        :param N_j:
-        :param min:
-        :param finemax:
-        :param max:
-        :return:
-        """
-        N_j_fine = int(N_j * 3 / 4)
-        N_j_coarse = int(N_j - N_j_fine)
+    def make_valence_energy_axis(self, N_j: int, min=-6, finemax=15, max=50):
+            """
+            Creates an energy axis for the valence band, namely
+                self.E_j
+            and its edgepoints
+                self.enax_j_edges
+            Energies are relative to the fermi-level. 3/4 of all points fall into the range (min, finemax)
+            Makes sure that the energies E_i correspond to a point in E_j and
+            drops the closest points to keep the number N_j.
+            :param N_j:
+            :param min:
+            :param finemax:
+            :param max:
+            :return:
+            """
+            N_j_fine = int(N_j * 3 / 4)
+            N_j_coarse = int(N_j - N_j_fine)
 
-        # Midpoints!
-        enax_j_fine = list(np.linspace(min, finemax, N_j_fine))
-        dE_fine = enax_j_fine[1] - enax_j_fine[0]
-        enax_j_coarse = list(np.linspace(finemax + dE_fine, max, N_j_coarse))
-        # make sure that resonant energies are in there
-        enax_j = np.concatenate((enax_j_fine, enax_j_coarse))
-        good_js = list(np.ones(enax_j.shape, dtype=bool))
-        for i in range(self.N_photens):
-            deltas = enax_j - self.E_i[i]
-            good_js[np.argmin(deltas)] = False  # drop the one closest to E_i
-        enax_j = np.sort(np.concatenate((enax_j[good_js], self.E_i)))
+            def fill_biggest_gap(pointlist):
+                """
+                This function takes a list of points and appends a point in the middle of the biggest gap
+                """
+                pointlist = np.array(np.sort(pointlist))
+                gaps = pointlist[1:]-pointlist[:-1]
+                biggest_gap_index = np.argsort(gaps)[-1]
+                biggest_gap = gaps[biggest_gap_index]
+                list_before = pointlist[:biggest_gap_index+1]
+                new_value = pointlist[biggest_gap_index] + 0.5*biggest_gap
+                list_after = pointlist[biggest_gap_index+1:]
+                return np.concatenate((list_before, [new_value,], list_after))
 
-        if not len(enax_j) == N_j:
-            warnings.warn(
-                'Energy Axis turned out longer or shorter than planne. Are resonant energies very close together?')
-            self.N_j = len(enax_j)
-        def edgepoints(middles):
-            """ Opposite of midpoints """
-            edges = np.empty(middles.shape[0] + 1)
-            edges[1:-1] = (middles[1:] + middles[:-1]) / 2
-            edges[0] = middles[0] - (middles[1] - middles[0]) / 2
-            edges[-1] = middles[-1] + (middles[-1] - middles[-2]) / 2
-            return edges
+            # The energies E_i and 0 must be in the axis
+            enax_j_fine = [min, 0, finemax]+list(self.E_i[self.E_i<=finemax])
+            # Fill up the gaps
+            while len(enax_j_fine)<N_j_fine:
+                enax_j_fine = fill_biggest_gap(enax_j_fine)
 
-        return enax_j, edgepoints(enax_j)
+            dE = np.mean(enax_j_fine[1:]-enax_j_fine[:-1])
+            #The same for the coarse part
+            enax_j_coarse = [finemax+dE, max]+list(self.E_i[self.E_i>finemax])
+            while len(enax_j_coarse)<N_j_coarse:
+                enax_j_coarse = fill_biggest_gap(enax_j_coarse)
+
+            enax_j = np.concatenate((enax_j_fine, enax_j_coarse))
+
+            if not len(enax_j) == N_j:
+                warnings.warn(
+                    'Energy Axis turned out longer or shorter than planned. What went wrong?')
+                self.N_j = len(enax_j)
+
+            def edgepoints(middles):
+                """ Opposite of midpoints """
+                edges = np.empty(middles.shape[0] + 1)
+                edges[1:-1] = (middles[1:] + middles[:-1]) / 2
+                edges[0] = middles[0] - (middles[1] - middles[0]) / 2
+                edges[-1] = middles[-1] + (middles[-1] - middles[-2]) / 2
+                return edges
+
+            return enax_j, edgepoints(enax_j)
 
 
 class FermiSolver:
@@ -461,16 +479,6 @@ class XNLsim:
         incident_pulse_energies = np.trapz(sol_photon_densities[0, :, :], x=sol.t)
         transmitted_pulse_energies = np.trapz(sol_photon_densities[-1, :, :], x=sol.t)
 
-        ### Also reconstruct the temperatures and Fermi energies
-        sol.temperatures = np.zeros((len(sol.t),self.par.Nsteps_z))
-        sol.fermi_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
-        sol_rho_j = soly[:, 3:, :]
-        sol_VB = np.sum(sol_rho_j,1)
-        for it,t in enumerate(sol.t):
-            for iz in range(self.par.Nsteps_z):
-                U = np.sum(sol_rho_j[iz,:,it]*self.par.E_j)#np.trapz(sol_rho_j[iz,:,it]*self.par.E_j, x = self.par.E_j)
-                R = sol_VB[iz,it]
-                sol.temperatures[it,iz], sol.fermi_energies[it,iz] = self.par.FermiSolver.lookup_TEf_from_UR(U,R)
 
         if plot:
             self.plot_results(sol, sol_photon_densities)
@@ -696,6 +704,8 @@ class XNLsim:
             R = np.sum(current_rho_j)
             U = np.sum(current_rho_j*self.par.E_j)#np.trapz(current_rho_j*self.par.E_j, x = self.par.E_j)
             self.par.target_distributions[iz,:] = self.par.FermiSolver.lookup_target_distribution(current_rho_j)
+            if self.DEBUG and (iz==0):
+                print(U,R,'->',*self.par.FermiSolver.lookup_TEf_from_UR(U, R))
 
         # Calculate photon transmission as save it
         N_Ej_z = self.z_dependence(t, self.state_vector)
@@ -801,8 +811,20 @@ class XNLsim:
         sol.R_VB = np.sum(sol.rho_j,1)
         
         sol.photon_densities = sol_photon_densities
-
-
+        
+        ### Also reconstruct the temperatures and Fermi energies
+        sol.temperatures = np.zeros((len(sol.t),self.par.Nsteps_z))
+        sol.fermi_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
+        
+        for it,t in enumerate(sol.t):
+            for iz in range(self.par.Nsteps_z):
+                U = np.sum(sol.rho_j[iz,:,it]*self.par.E_j)
+                R = sol.R_VB[iz,it]
+                if iz==0:
+                    print(U,R,'->',*self.par.FermiSolver.lookup_TEf_from_UR(U, R))
+                sol.temperatures[it,iz], sol.fermi_energies[it,iz] = self.par.FermiSolver.lookup_TEf_from_UR(U,R)
+            
+            
         fig, axes = plt.subplots(2, 2, figsize=(8, 8))
         plt.sca(axes[0, 0])
         plt.title('State occupation changes')

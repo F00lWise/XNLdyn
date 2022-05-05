@@ -28,7 +28,7 @@ lambda_nonres = 500    # Absorption length of non-resonant photons, assumed equa
 E_f = 850.7 #eV
 
 ## Incident photon profile
-I0       = [1,1]   # Pulse energy density in photons per nm²
-t0       = [0,1]   # Arrival time on time-axis / fs
+I0       = [1,2]   # Pulse energy density in photons per nm²
+t0       = [0,10]   # Arrival time on time-axis / fs
 tdur_sig = [10,10]  # Rms pulse duration / fs
-E_i      = [855,850] # Photon Energies of incident pulses / eV
+E_i      = [855,849] # Photon Energies of incident pulses / eV
