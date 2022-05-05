@@ -798,7 +798,7 @@ class XNLsim:
         sol.R_free = soly[:, 1, :]
         sol.E_free = soly[:, 2, :]
         sol.rho_j = soly[:, 3:, :]
-        sol.R_VB = np.sum(sol_rho_j,1)
+        sol.R_VB = np.sum(sol.rho_j,1)
         
         sol.photon_densities = sol_photon_densities
 
@@ -813,7 +813,7 @@ class XNLsim:
         plt.plot(sol.t, (sol.R_VB[0] - PAR.R_VB_0) / PAR.M_VB, label='Valence @surface')
 
         plt.plot(sol.t, np.mean(sol.rho_j, 0).T / PAR.m_j,
-                 label=[f'{PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.2f} nm' for i in range(PAR.N_j)])
+                 label=[f'{PAR.E_j[i]:.2f} eV,  {PAR.lambda_res_Ej[i]:.2f} nm' for i in range(PAR.N_j)])
 
         plt.ylabel('Occupation')
         plt.xlabel('t (fs)')

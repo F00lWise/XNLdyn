@@ -20,8 +20,7 @@ if __name__ == '__main__':
 
     PAR.I0 =  [XNLdyn.photons_per_J(PAR.E_i[0])*pulse_energy_J,]
 
-
-    sim = XNLdyn.XNLsim(PAR, DEBUG=True, load_tables = True)
+    sim = XNLdyn.XNLsim(PAR, DEBUG=True, load_tables = False)
 
     PAR.FermiSolver.plot_lookup_tables()
 
