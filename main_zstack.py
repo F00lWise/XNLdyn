@@ -25,7 +25,6 @@ if __name__ == '__main__':
 
     PAR.FermiSolver.plot_lookup_tables()
 
-    print(PAR.E_j)
     #
 
     sim_options = dict(t_span=[-40, 60], method='RK45', rtol=1e-6, atol=1e-8, plot=True, return_full_solution=True)
@@ -35,4 +34,4 @@ if __name__ == '__main__':
     print('Transmission: ', 100 * transmitted / incident, ' %')
 
 
-    #plt.show()
+    plt.show()

@@ -207,16 +207,15 @@ class FermiSolver:
     """
     This class finds the target "thermal equilibrium" electron distribution in the valence band for any given distribution or a set of inner energy and population
     """
-    def __init__(self, par, DoS,  DEBUG=False):
+    def __init__(self, par, m_j,  DEBUG=False):
         self.par0 = lmfit.Parameters()
         self.par0.add('T', value=350, min=300, max=1e6)
         self.par0.add('Ef', value=1, min=-9, max=20)
         self.par = par
         self.enax = par.E_j
-        self.DoS = DoS
+        self.m_j = m_j
         self.kB = 8.617333262145e-5
         self.DEBUG = DEBUG
-
 
     def fermi(self, T: float, Ef: float):
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
@@ -226,8 +225,8 @@ class FermiSolver:
         fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
         fermi_distr[energy_ratios < -15] = 1
         fermi_distr[energy_ratios > 15] = 0
-        if self.DEBUG:
-            check_bounds(fermi_distr, message='Fermi distribution in fermi()')
+        #if self.DEBUG:
+        #    check_bounds(fermi_distr, message='Fermi distribution in fermi()')
         return fermi_distr
 
     def inner_energy(self, occupation):
@@ -241,9 +240,9 @@ class FermiSolver:
         vals = pars.valuesdict()
         T = vals['T']
         Ef = vals['Ef']
-        occ = self.DoS * self.fermi(T, Ef)* (self.par.enax_j_edges[1:]-self.par.enax_j_edges[:-1])
+        occ = self.m_j * self.fermi(T, Ef)
         U = self.inner_energy(occ)
-        R = np.sum(occ)#np.trapz(occ, self.enax)
+        R = np.sum(occ)
         ur = np.abs(U - U_target)
         rr = np.abs(R - R_target)
         return ur, rr
@@ -286,7 +285,7 @@ class FermiSolver:
 
         T, Ef = self.solve(U_is, R_is)
         if self.DEBUG: print(U_is, R_is, T, Ef)
-        return self.DoS * self.fermi(T, Ef)
+        return self.m_j * self.fermi(T, Ef)
 
     def generate_lookup_tables(self, Urange=np.linspace(-25, 25, 82), Rrange=np.linspace(0, 20, 80), save=True):
         print(
@@ -368,7 +367,7 @@ class FermiSolver:
         T, Ef = self.lookup_TEf_from_UR(U_is, R_is)
 
         if self.DEBUG: print(U_is, R_is, T, Ef)
-        return self.DoS * self.fermi(T, Ef)
+        return self.m_j * self.fermi(T, Ef)
 
     def plot_lookup_tables(self):
         Ugrid, Rgrid = np.meshgrid(self.Urange, self.Rrange)
@@ -401,6 +400,7 @@ class FermiSolver:
 
         plt.pause(0.1)
         plt.show(block = False)
+
 ## Main Simulation
 
 class XNLsim:
@@ -812,7 +812,7 @@ class XNLsim:
         plt.plot(sol.t, (sol_VB[0] - PAR.R_VB_0) / PAR.M_VB, label='Valence @surface')
 
         plt.plot(sol.t, np.mean(sol_rho_j, 0).T / PAR.m_j,
-                 label=[f'{PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in range(PAR.N_j)])
+                 label=[f'{PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.2f} nm' for i in range(PAR.N_j)])
 
         plt.ylabel('Occupation')
         plt.xlabel('t (fs)')
@@ -830,9 +830,9 @@ class XNLsim:
 
         plt.sca(axes[1, 0])
         plt.title('Energies Averaged over z')
-        plt.plot(sol.t, np.mean(sol.temperatures, 0), label='Temperature')
-        plt.plot(sol.t, np.mean(sol.fermi_energies, 0), label='Fermi level shift')
-        plt.plot(sol.t, sol.temperatures[0], label='Temperature @ Surface')
+        plt.plot(sol.t, np.mean(sol.temperatures, 1), label='Temperature')
+        plt.plot(sol.t, np.mean(sol.fermi_energies, 1), label='Fermi level shift')
+        plt.plot(sol.t, sol.temperatures[:,0], label='Temperature @ Surface')
         plt.plot(sol.t, sol_Efree[0], label='Fermi level shift @surface')
         plt.ylabel('E (eV)')
         plt.xlabel('t (fs)')
