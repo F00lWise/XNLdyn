@@ -10,8 +10,8 @@ temperature = 300 # Kelvin
 
 # Electronic state numbers per atom
 core_states = 2
-total_valence_states = 10
-valence_GS_occupation = 8
+total_valence_states = 12
+valence_GS_occupation = 10
 
 DoS_shapefile = './DoSdata.npy'
 

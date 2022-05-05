@@ -794,24 +794,25 @@ class XNLsim:
         PAR = self.par
         ## Plotting
         soly = sol.y.reshape((PAR.Nsteps_z, PAR.states_per_voxel, len(sol.t)))
-        sol_core = soly[:, 0, :]
-        sol_free = soly[:, 1, :]
-        sol_Efree = soly[:, 2, :]
-        sol_rho_j = soly[:, 3:, :]
-        sol_VB = np.sum(sol_rho_j,1)
-
+        sol.core = soly[:, 0, :]
+        sol.R_free = soly[:, 1, :]
+        sol.E_free = soly[:, 2, :]
+        sol.rho_j = soly[:, 3:, :]
+        sol.R_VB = np.sum(sol_rho_j,1)
+        
+        sol.photon_densities = sol_photon_densities
 
 
         fig, axes = plt.subplots(2, 2, figsize=(8, 8))
         plt.sca(axes[0, 0])
         plt.title('State occupation changes')
-        plt.plot(sol.t, 1 - (np.mean(sol_core, 0) / PAR.M_core), label='Core holes')
-        plt.plot(sol.t, 1 - (sol_core[0] / PAR.M_core), label='Core holes @surface')
+        plt.plot(sol.t, 1 - (np.mean(sol.core, 0) / PAR.M_core), label='Core holes')
+        plt.plot(sol.t, 1 - (sol.core[0] / PAR.M_core), label='Core holes @surface')
 
-        plt.plot(sol.t, (np.mean(sol_VB, 0) - PAR.R_VB_0) / PAR.M_VB, label='Valence band occupation')
-        plt.plot(sol.t, (sol_VB[0] - PAR.R_VB_0) / PAR.M_VB, label='Valence @surface')
+        plt.plot(sol.t, (np.mean(sol.R_VB, 0) - PAR.R_VB_0) / PAR.M_VB, label='Valence band occupation')
+        plt.plot(sol.t, (sol.R_VB[0] - PAR.R_VB_0) / PAR.M_VB, label='Valence @surface')
 
-        plt.plot(sol.t, np.mean(sol_rho_j, 0).T / PAR.m_j,
+        plt.plot(sol.t, np.mean(sol.rho_j, 0).T / PAR.m_j,
                  label=[f'{PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.2f} nm' for i in range(PAR.N_j)])
 
         plt.ylabel('Occupation')
@@ -821,8 +822,8 @@ class XNLsim:
         plt.sca(axes[0, 1])
         plt.title('Kinetic electrons')
 
-        plt.plot(sol.t, np.mean(sol_free, 0), label='Kinetic electrons')
-        plt.plot(sol.t, sol_free[0], label='Surface')
+        plt.plot(sol.t, np.mean(sol.R_free, 0), label='Kinetic electrons')
+        plt.plot(sol.t, sol.R_free[0], label='Surface')
 
         plt.ylabel('Occupation')
         plt.xlabel('t (fs)')
@@ -833,7 +834,7 @@ class XNLsim:
         plt.plot(sol.t, np.mean(sol.temperatures, 1), label='Temperature')
         plt.plot(sol.t, np.mean(sol.fermi_energies, 1), label='Fermi level shift')
         plt.plot(sol.t, sol.temperatures[:,0], label='Temperature @ Surface')
-        plt.plot(sol.t, sol_Efree[0], label='Fermi level shift @surface')
+        plt.plot(sol.t, sol.E_free[0], label='Fermi level shift @surface')
         plt.ylabel('E (eV)')
         plt.xlabel('t (fs)')
         plt.legend()
