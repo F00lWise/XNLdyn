@@ -644,7 +644,15 @@ class XNLsim:
         R_VB = np.sum(rho_j, axis=1)
         direct_augers = self.ch_decay
         indirect_augers = ((rho_j * np.outer(np.sum(self.ch_decay, axis = 1),np.ones(self.par.N_j))).T/R_VB).T
-        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers - indirect_augers + self.el_therm
+        holes_j = self.par.m_j - rho_j
+        if np.any(holes_j<0):
+            warnings.warn(f'negative electron hole density found: {holes_j}')
+            holes_j[holes_j<0]=0
+        holes   = self.par.M_VB - np.sum(rho_j)
+        if holes < 1e-8:
+            warnings.warn(f'Number of holes got critically low for computational accuracy.')
+            holes_j *=0
+        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers - indirect_augers + self.el_therm + ((holes_j/holes).T* self.el_scatt).T
 
     def rate_core(self):
         return np.sum(self.ch_decay, axis=1) - np.sum(self.res_inter, axis=1)
