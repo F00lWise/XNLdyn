@@ -96,8 +96,16 @@ class XNLpars:
         ## mj are normalized by the ground state population
         # Best way to do it: self.DoS = self.R_VB_0* DoS_raw / np.trapz(np.append(DoS_raw[self.E_j<=0],np.interp(0,self.E_j,DoS_raw)), np.append(self.E_j[self.E_j<=0],0))
         # Faster and consistent way to do it:
-        self.DoS = self.R_VB_0*DoS_raw * np.trapz(DoS_raw[self.E_j<=0], self.E_j[self.E_j<=0])
-        self.m_j = np.array([self.get_resonant_states(self.enax_j_edges[i], self.enax_j_edges[i+1]) for i, _ in enumerate(self.E_j)])
+        #self.DoS = DoS_raw * self.R_VB_0 / np.trapz(DoS_raw[self.E_j<=0], self.E_j[self.E_j<=0])
+
+        #        self.m_j = np.array([self.get_resonant_states(self.enax_j_edges[i], self.enax_j_edges[i+1]) for i, _ in enumerate(self.E_j)])
+        enax_dE = self.enax_j_edges[1:] - self.enax_j_edges[:-1]
+        #DoS = DoS / np.sum(DoS)
+        self.m_j = DoS_raw * enax_dE  # scale with energy step size
+        occupied = (np.sum(self.m_j[self.E_j<0])+ 0.5*self.m_j[self.E_j==0])/np.sum(self.m_j) # part that is occupied in GS
+        self.m_j = self.m_j / np.sum(self.m_j) # normalize to one to be sure
+        self.m_j*= valence_GS_occupation / occupied # scale to ground state occupation
+        #self.m_j = m_j * 10 / np.sum(m_j[enax < 0])
 
         self.FermiSolver = FermiSolver(self, self.m_j)
 
@@ -108,7 +116,7 @@ class XNLpars:
         self.rho_j_0  = self.m_j * self.FermiSolver.fermi(temperature, 0) # occupied acording to initial temperature
 
         ## derived from these
-        self.R_VB_0 = np.sum(self.rho_j_0)  # Initially occupied up to Fermi Energy
+        #self.R_VB_0 = np.sum(self.rho_j_0)  # Initially occupied up to Fermi Energy
         self.T_0 = temperature  # Initial thermal energy of the average valence electron
 
         # This vector contains all parameters that are tracked over time
@@ -263,10 +271,12 @@ class FermiSolver:
         R = np.sum(occ)
         ur = np.abs(U - U_target)
         rr = np.abs(R - R_target)
-        return ur, rr
+        #print(f'Resiuals rU:{ur}, rR{rr}')
+        return ur,  rr
 
     def solve(self, U, R):
-        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R), method='nelder')
+        #print(f'Looking for a solution for U: {U}, R:{R}')
+        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R), method='powell')#nelder
         ## Check for large residuals
         res_U, res_R = res.residual
         if res_U > 0.1:
@@ -289,7 +299,9 @@ class FermiSolver:
             if self.DEBUG: print('Maximum Ef reached!')
             return np.nan, np.nan
         if not res.success:
-            raise RuntimeError('No solution found!')
+            #raise RuntimeError('No solution found!')
+            return np.nan, np.nan
+
         else:
             self.par0 = res.params  # pass solution for the next iteration
             return res.params['T'].value, res.params['Ef'].value
