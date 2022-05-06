@@ -60,7 +60,8 @@ class XNLpars:
         self.I0_i = np.array(I0)
         self.t0_i = np.array(t0)
         self.tdur_sig_i = np.array(tdur_sig)
-        self.E_i = np.array(E_i)
+        self.E_i_abs = np.array(E_i)
+        self.E_i = np.empty(N_photens) # defined below
 
         assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_i) == len(lambda_res_Ei)), \
             'Make sure all photon pulses get all parameters!'
@@ -70,8 +71,7 @@ class XNLpars:
         self.zstepsize = self.Z / self.Nsteps_z
         self.zaxis = np.arange(0, self.Z, self.zstepsize)
 
-        self.E_i = np.array(self.E_i) - self.E_f  # self.E_i becomes relative to Fermi edge
-
+        self.E_i = np.array(self.E_i_abs) - self.E_f  # self.E_i becomes relative to Fermi edge
         # Energy Axis
         self.E_j, self.enax_j_edges = self.make_valence_energy_axis(self.N_j)
         # Indizes where E_j == E_i
@@ -79,14 +79,18 @@ class XNLpars:
 
 
         ## Expanding the incident photon energies so that they match the tracked energies
-        self.lambda_res_Ej = self.I0 = self.t0 = self.tdur_sig = np.zeros(self.N_j, dtype = np.float64)
+        self.lambda_res_Ej = np.zeros(self.N_j, dtype = np.float64)
+        self.I0 = np.zeros(self.N_j, dtype = np.float64)
+        self.t0 = np.zeros(self.N_j, dtype = np.float64)
+        self.tdur_sig = np.zeros(self.N_j, dtype = np.float64)
         self.lambda_res_Ej[self.resonant] = self.lambda_res_Ei
         self.lambda_res_Ej_inverse = np.zeros(self.lambda_res_Ej.shape, dtype=np.float64)
         self.lambda_res_Ej_inverse[self.resonant] = 1/self.lambda_res_Ej[self.resonant]
-        self.I0[self.resonant] = self.I0_i
+        
+        self.I0[self.resonant] = self.I0_i       
         self.t0[self.resonant] = self.t0_i
         self.tdur_sig[self.resonant] = self.tdur_sig_i
-
+        
         ## Load DoS data
         ld = np.load(self.DoS_shapefile)
         DoSdata = {}
@@ -376,7 +380,7 @@ class FermiSolver:
 
         pl1 = ax1.pcolormesh(Ugrid, Rgrid, temperatures_gr, cmap=plt.cm.coolwarm,
                              norm=mpl.colors.LogNorm(vmin=200, vmax=1e6),
-                             linewidth=1)
+                             linewidth=1,shading = 'nearest')
         fig.colorbar(pl1)  # , shrink=0.5, aspect=5
         ax1.set_title('Electron temperature (K)')
         ax1.set_ylabel('Valence electrons per atom')
@@ -385,7 +389,7 @@ class FermiSolver:
         ax2 = fig.add_subplot(1, 2, 2)
 
         pl2 = ax2.pcolormesh(Ugrid, Rgrid, fermi_energies_gr, cmap=plt.cm.seismic, vmin=-20, vmax=20,
-                             linewidth=1)
+                             linewidth=1,shading = 'nearest')
         fig.colorbar(pl2)  # , shrink=0.5, aspect=5
         ax2.set_title('Fermi energy shift (eV)')
         ax2.set_ylabel('Valence electrons per atom')
@@ -398,7 +402,7 @@ class FermiSolver:
 
         pl1 = ax1.pcolormesh(temperatures_gr, fermi_energies_gr, self.Ugrid, \
                              cmap=plt.cm.coolwarm,
-                             linewidth=1)
+                             linewidth=1,shading = 'nearest')
         fig.colorbar(pl1)  # , shrink=0.5, aspect=5
         ax1.set_title('Inner Energy')
         ax1.set_xlabel('Temperature')
@@ -407,7 +411,7 @@ class FermiSolver:
         ax2 = fig.add_subplot(1, 2, 2)
 
         pl2 = ax2.pcolormesh(temperatures_gr, fermi_energies_gr, self.Rgrid, cmap=plt.cm.seismic,
-                             linewidth=1)
+                             linewidth=1,shading = 'nearest')
         fig.colorbar(pl2)  # , shrink=0.5, aspect=5
         ax2.set_title('Population')
         ax2.set_xlabel('Temperature')
@@ -416,7 +420,7 @@ class FermiSolver:
         plt.pause(0.1)
         plt.show(block=False)
 
-    def generate_lookup_tables(self, N=80, save=True):
+    def generate_lookup_tables(self, N=100, save=True):
 
         assert np.mod(N, 2) == 0
         temperatures = np.logspace(0, 6, N - 1) + 300
@@ -697,6 +701,7 @@ class XNLsim:
             holes_j[holes_j<0]=0
         holes = self.par.M_VB - np.sum(rho_j)
         if holes < 1e-8:
+            #TODO: Check why this triggers often in the very first time step
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
             holes_j *= 0
         return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers -\
@@ -761,8 +766,7 @@ class XNLsim:
     ##########################################################
 
     def time_derivative(self, t, state_vector_flat):
-        #if self.DEBUG:
-        print('t: ', t)
+        if self.DEBUG: print('t: ', t)
         # Reshape the state vector into sensible dimension
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
         check_bounds(self.state_vector[:, 3], 0, np.inf,
@@ -773,7 +777,7 @@ class XNLsim:
             current_rho_j = self.state_vector[iz,3:]
             R = np.sum(current_rho_j)
             U = np.sum(current_rho_j*self.par.E_j)#np.trapz(current_rho_j*self.par.E_j, x = self.par.E_j)
-            if iz == 0:
+            if iz < 2:
                 # When jumping to the surfacem do the safer lookup.
                 T, E_f = self.par.FermiSolver.save_lookup_TEf_from_UR(U,R)
                 if self.DEBUG and (iz == 0):
@@ -863,19 +867,6 @@ class XNLsim:
         plt.ylabel('Photon density')
         self.axis_der.set_title('Derivatives')
 
-    def plot_thermal_occupations(self, thermal_occupations=None):
-        if not 'figure_therm' in dir(self):
-            self.figure_therm = plt.figure()
-            self.axis_therm = plt.gca()
-        else:
-            plt.sca(self.axis_therm)
-            self.axis_therm.clear()
-
-        if thermal_occupations is None:
-            thermal_occupations = self.thermal_occupations
-
-        self.axis_therm.set_title('Thermal Occupations')
-        plt.plot(thermal_occupations)
 
     def plot_results(self, sol, sol_photon_densities):
         PAR = self.par
@@ -898,26 +889,22 @@ class XNLsim:
                 U = np.sum(sol.rho_j[iz,:,it]*self.par.E_j)
                 R = sol.R_VB[iz,it]
                 T, Ef = self.par.FermiSolver.save_lookup_TEf_from_UR(U, R)
-                if iz==0:
+                if self.DEBUG and (iz==0):
                     print(U,R,'->',T, Ef)
                 sol.temperatures[it,iz], sol.fermi_energies[it,iz] = (T, Ef)
             
             
-        fig, axes = plt.subplots(2, 2, figsize=(8, 8))
+        fig, axes = plt.subplots(3, 2, figsize=(8, 8))
         plt.sca(axes[0, 0])
         plt.title('State occupation changes')
-        plt.plot(sol.t, 1 - (np.mean(sol.core, 0) / PAR.M_core), label='Core holes')
-        plt.plot(sol.t, 1 - (sol.core[0] / PAR.M_core), label='Core holes @surface')
-
-        plt.plot(sol.t, (np.mean(sol.R_VB, 0) - PAR.R_VB_0) / PAR.M_VB, label='Valence band occupation')
-        plt.plot(sol.t, (sol.R_VB[0] - PAR.R_VB_0) / PAR.M_VB, label='Valence @surface')
-
-        plt.plot(sol.t, np.mean(sol.rho_j, 0).T / PAR.m_j,
-                 label=[f'{PAR.E_j[i]:.2f} eV,  {PAR.lambda_res_Ej[i]:.2f} nm' for i in range(PAR.N_j)])
-
-        plt.ylabel('Occupation')
+        plt.pcolormesh(sol.t, PAR.E_j +PAR.E_f,
+                       (sol.rho_j[0]-np.outer(PAR.rho_j_0,np.ones(sol.t.shape)))/np.outer(PAR.m_j,np.ones(sol.t.shape)),
+                       cmap = plt.cm.seismic, vmin = -1, vmax = 1, shading = 'nearest')#
+        plt.colorbar(label = 'Occupacion change')
         plt.xlabel('t (fs)')
-        plt.legend()
+        plt.ylabel('Energy (eV)')
+        plt.title('Surface layer Valence occupation changes')
+
 
         plt.sca(axes[0, 1])
         plt.title('Kinetic electrons')
@@ -931,27 +918,55 @@ class XNLsim:
 
         plt.sca(axes[1, 0])
         plt.title('Energies Averaged over z')
-        plt.plot(sol.t, np.mean(sol.temperatures, 1), label='Temperature')
-        plt.plot(sol.t, np.mean(sol.fermi_energies, 1), label='Fermi level shift')
-        plt.plot(sol.t, sol.temperatures[:,0], label='Temperature @ Surface')
-        plt.plot(sol.t, sol.E_free[0], label='Fermi level shift @surface')
-        plt.ylabel('E (eV)')
+        plt.plot(sol.t, np.mean(sol.temperatures, 1),'C0', label='Temperature')
+        plt.plot(sol.t, sol.temperatures[:,0],'C1', label='Temperature @ Surface')
+        plt.ylabel('T (K)')
+        plt.legend()
+
+        axcp = axes[1,0].twinx()
+        plt.plot(sol.t, np.mean(sol.fermi_energies, 1),'C2', label='Fermi level shift')
+        plt.plot(sol.t, sol.E_free[0],'C3', label='Fermi level shift @surface')
         plt.xlabel('t (fs)')
+        plt.ylabel('E (eV)')
+
         plt.legend()
 
         plt.sca(axes[1, 1])
         plt.title('Photons')
         plt.xlabel('t (fs)')
+        cols = plt.cm.cool(np.linspace(0,1,PAR.N_photens))
+        for iE,E in enumerate(self.par.E_i):
+            plt.plot(sol.t, sol_photon_densities[0, iE, :].T, c = cols[iE],ls = ':',
+                 label=f'Incident {PAR.E_i[iE]:.2f} eV,  {PAR.lambda_res_Ei[iE]:.2f} nm' )
+            plt.plot(sol.t, sol_photon_densities[-1, iE, :].T,c = cols[iE],
+                 label=f'Transmitted' )
 
-        plt.plot(sol.t, sol_photon_densities[-1, :, :].T,
-                 label=[f'Transmitted {PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in
-                        range(PAR.N_photens)])
+        #plt.plot(sol.t, sol_photon_densities[-1, :, :].T,
+        #         label=[f'Transmitted {PAR.E_i[i]:.0f} eV,  {PAR.lambda_res_Ei[i]:.2f} nm' for i in
+        #                range(PAR.N_photens)])
 
-        plt.plot(sol.t, sol_photon_densities[0, :, :].T,
-                 label=[f'Incident {PAR.E_j[i]:.0f} eV,  {PAR.lambda_res_Ej[i]:.0f} nm' for i in range(PAR.N_photens)])
+        #plt.plot(sol.t, sol_photon_densities[0, :, :].T,
+        #         label=[f'Incident {PAR.E_i[i]:.0f} eV,  {PAR.lambda_res_Ei[i]:.2f} nm' for i in range(PAR.N_photens)])
         plt.legend()
         plt.ylabel('T')
         plt.xlabel('t (fs)')
+
+        
+        plt.sca(axes[2, 0])
+        plt.title('Key populations at sample surface')
+        plt.plot(sol.t,sol.core[0]/self.par.M_core, label = 'Core holes')
+        plt.plot(sol.t,(sol.R_VB[0])/self.par.M_VB, label = 'Total Valence')
+        cols = plt.cm.cool(np.linspace(0,1,PAR.N_photens))
+        for iE,E in enumerate(self.par.E_i):
+            plt.plot(sol.t,sol.rho_j[0,PAR.resonant,:][iE].T/self.par.m_j[PAR.resonant][iE],c = cols[iE], label = f'rho at {E:.2f}eV')
+        plt.legend()
+
+        plt.sca(axes[2, 1])
+        plt.title('Total number of electrons (<z>)')
+        plt.plot(sol.t,np.mean(sol.core + sol.R_free +sol.R_VB,0))
+        plt.ylabel('Electrons')
+        plt.xlabel('time (fs)')
+
 
         plt.tight_layout()
         plt.show()
