@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import scipy as sc
 from scipy.integrate import solve_ivp
 import numpy as np
@@ -8,8 +9,8 @@ import lmfit
 # Import all the parameters defined in the params file and processed in process_params
 from .params import *
 
-
-def check_bounds(value, min=0, max=1., message=''):
+RTOL = 1e-5
+def check_bounds(value, min=0 - RTOL, max=1. + RTOL, message=''):
     if np.any(value < min):
         string = f'Found value up to {np.min(value[value < min]) - min:.3e} under minimum of {min}.' + message
         warnings.warn(string)
@@ -41,7 +42,7 @@ class XNLpars:
 
         ## Electronic state numbers per atom
         self.M_core = core_states
-        self.M_VB = total_valence_states
+        #self.M_VB = total_valence_states # define as sum(m_j)
         self.R_VB_0 = valence_GS_occupation
         self.DoS_shapefile = DoS_shapefile
 
@@ -105,6 +106,7 @@ class XNLpars:
         occupied = (np.sum(self.m_j[self.E_j<0])+ 0.5*self.m_j[self.E_j==0])/np.sum(self.m_j) # part that is occupied in GS
         self.m_j = self.m_j / np.sum(self.m_j) # normalize to one to be sure
         self.m_j*= valence_GS_occupation / occupied # scale to ground state occupation
+        self.M_VB = np.sum(self.m_j)
         #self.m_j = m_j * 10 / np.sum(m_j[enax < 0])
 
         self.FermiSolver = FermiSolver(self, self.m_j)
@@ -131,18 +133,6 @@ class XNLpars:
         self.energy_differences = np.zeros((self.Nsteps_z, self.N_j, self.N_photens))
         for i in range(self.N_photens):
             self.energy_differences[:,:,i] = (self.E_j - self.E_i[i])
-
-        # Pre-initialization for efficient memory usage
-        self.res_inter      = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
-        self.nonres_inter   = np.empty((self.Nsteps_z, self.N_j, self.N_photens), dtype = np.float64)
-        self.ch_decay       = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
-        self.el_therm       = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
-        self.el_scatt       = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
-        self.mean_free      = np.empty((self.Nsteps_z), dtype = np.float64)
-        self.mean_valence   = np.empty((self.Nsteps_z), dtype = np.float64)
-        self.state_vector   = np.empty(self.state_vector_0.shape, dtype = np.float64)
-        self.T              = self.T_0
-        self.target_distributions = np.empty((self.Nsteps_z, self.N_j), dtype = np.float64)
 
     def get_resonant_states(self, Emin, Emax, npoints=10):
         """
@@ -233,7 +223,8 @@ class FermiSolver:
     """
     This class finds the target "thermal equilibrium" electron distribution in the valence band for any given distribution or a set of inner energy and population
     """
-    def __init__(self, par, m_j,  DEBUG=False):
+
+    def __init__(self, par, m_j, DEBUG=False):
         self.par0 = lmfit.Parameters()
         self.par0.add('T', value=350, min=300, max=1e6)
         self.par0.add('Ef', value=1, min=-9, max=20)
@@ -251,12 +242,12 @@ class FermiSolver:
         fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
         fermi_distr[energy_ratios < -15] = 1
         fermi_distr[energy_ratios > 15] = 0
-        #if self.DEBUG:
+        # if self.DEBUG:
         #    check_bounds(fermi_distr, message='Fermi distribution in fermi()')
         return fermi_distr
 
     def inner_energy(self, occupation):
-        return np.sum(self.enax*occupation)#np.trapz(self.enax * occupation, self.enax)
+        return np.sum(self.enax * occupation)  # np.trapz(self.enax * occupation, self.enax)
 
     def optimizable(self, pars, U_target, R_target):
         """
@@ -271,12 +262,12 @@ class FermiSolver:
         R = np.sum(occ)
         ur = np.abs(U - U_target)
         rr = np.abs(R - R_target)
-        #print(f'Resiuals rU:{ur}, rR{rr}')
-        return ur,  rr
+        # print(f'Resiuals rU:{ur}, rR{rr}')
+        return ur, rr
 
     def solve(self, U, R):
-        #print(f'Looking for a solution for U: {U}, R:{R}')
-        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R), method='powell')#nelder
+        # print(f'Looking for a solution for U: {U}, R:{R}')
+        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R), method='nelder')  # powell
         ## Check for large residuals
         res_U, res_R = res.residual
         if res_U > 0.1:
@@ -299,7 +290,7 @@ class FermiSolver:
             if self.DEBUG: print('Maximum Ef reached!')
             return np.nan, np.nan
         if not res.success:
-            #raise RuntimeError('No solution found!')
+            # raise RuntimeError('No solution found!')
             return np.nan, np.nan
 
         else:
@@ -311,39 +302,11 @@ class FermiSolver:
         Calculates a target distribution for a specific incident distribution by optimization of Ef and T
         """
         U_is = self.inner_energy(momentary_distribution)
-        R_is = np.sum(momentary_distribution)#np.trapz(momentary_distribution, x=self.enax)
+        R_is = np.sum(momentary_distribution)  # np.trapz(momentary_distribution, x=self.enax)
 
         T, Ef = self.solve(U_is, R_is)
         if self.DEBUG: print(U_is, R_is, T, Ef)
         return self.m_j * self.fermi(T, Ef)
-
-    def generate_lookup_tables(self, Urange=np.linspace(-25, 25, 82), Rrange=np.linspace(0, 20, 80), save=True):
-        print(
-            f'Starting to generate lookup tables for U between {np.min(Urange):.1f} to {np.max(Urange):.1f} and R between {np.min(Rrange):.1f} and {np.max(Rrange):.1f}')
-        self.Urange = Urange
-        self.Rrange = Rrange
-        self.precalc_temperatures = np.empty((Urange.shape[0], Rrange.shape[0]))
-        self.precalc_fermi_energies = np.empty((Urange.shape[0], Rrange.shape[0]))
-
-        for iu, u in enumerate(Urange):
-            for ir, r in enumerate(Rrange):
-                self.precalc_temperatures[iu, ir], self.precalc_fermi_energies[iu, ir] = self.solve(u, r)
-
-        Ugrid, Rgrid = np.meshgrid(Urange, Rrange)
-        self.Upoints = Ugrid.T.flatten()
-        self.Rpoints = Rgrid.T.flatten()
-        self.precalc_temperatures_points = self.precalc_temperatures.flatten()
-        self.precalc_fermi_energies_points = self.precalc_fermi_energies.flatten()
-        print('Lookup tables generated.')
-        if save:
-            savename = 'fermi_lookup_table.npz'
-            print(f'Saving at ./{savename}')
-            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints, Rrange=Rrange, Urange=Urange,
-                     temp_points=self.precalc_temperatures_points, ferm_points=self.precalc_fermi_energies_points)
-        self.Rmin = np.min(Rrange)
-        self.Rmax = np.max(Rrange)
-        self.Umin = np.min(Urange)
-        self.Umax = np.max(Urange)
 
     def load_lookup_tables(self):
         try:
@@ -363,7 +326,7 @@ class FermiSolver:
         print('Loaded lookup table successfully.')
 
     def lookup_TEf_from_UR(self, U_is, R_is):
-        if not (self.Umin < U_is < self.Umax):
+        if not (self.Umin-0.1 < U_is < self.Umax):
             raise ValueError(f'U: {U_is} out of bounds of lookup table')
         if not (self.Rmin < R_is < self.Rmax):
             raise ValueError(f'R: {R_is} out of bounds of lookup table')
@@ -377,11 +340,11 @@ class FermiSolver:
 
         if np.isnan(T) or np.isnan(Ef):
             print(f'Lookup failed. Trying direct solve for R={R_is:.1f} and U={U_is:.1f}')
-            T, Ef = self.solve(U_is, R_is) # try direct solving
-            self.Upoints = np.append(self.Upoints,U_is)
-            self.Rpoints = np.append(self.Rpoints,R_is)
-            self.precalc_temperatures_points = np.append(self.precalc_temperatures_points,T)
-            self.precalc_fermi_energies_points = np.append(self.precalc_fermi_energies_points,Ef)
+            T, Ef = self.solve(U_is, R_is)  # try direct solving
+            self.Upoints = np.append(self.Upoints, U_is)
+            self.Rpoints = np.append(self.Rpoints, R_is)
+            self.precalc_temperatures_points = np.append(self.precalc_temperatures_points, T)
+            self.precalc_fermi_energies_points = np.append(self.precalc_fermi_energies_points, Ef)
             if np.isnan(T) or np.isnan(Ef):
                 raise ValueError(f'Could not find a combination of Ef and T for R={R_is:.1f} and U={U_is:.1f}')
             print(f'Direct solve worked and lead to: T={T:.1f} and Ef={Ef:.1f}')
@@ -392,44 +355,113 @@ class FermiSolver:
         Calculates a target distribution for a specific incident distribution by optimization of Ef and T
         """
         U_is = self.inner_energy(momentary_distribution)
-        R_is = np.sum(momentary_distribution)#np.trapz(momentary_distribution, x=self.enax)
+        R_is = np.sum(momentary_distribution)  # np.trapz(momentary_distribution, x=self.enax)
 
-        T, Ef = self.lookup_TEf_from_UR(U_is, R_is)
+        T, Ef = self.save_lookup_TEf_from_UR(U_is, R_is)
 
         if self.DEBUG: print(U_is, R_is, T, Ef)
         return self.m_j * self.fermi(T, Ef)
 
     def plot_lookup_tables(self):
-        Ugrid, Rgrid = np.meshgrid(self.Urange, self.Rrange)
+        Ugrid, Rgrid = self.Ugrid, self.Rgrid  # np.meshgrid(self.Urange, self.Rrange)
         temperatures_gr = sc.interpolate.griddata((self.Upoints, self.Rpoints),
-                                                  self.precalc_temperatures_points,(Ugrid, Rgrid), method = 'nearest')
+                                                  self.precalc_temperatures_points, (Ugrid, Rgrid), method='nearest')
         fermi_energies_gr = sc.interpolate.griddata((self.Upoints, self.Rpoints),
-                                                    self.precalc_fermi_energies_points,(Ugrid, Rgrid), method = 'nearest')
+                                                    self.precalc_fermi_energies_points, (Ugrid, Rgrid),
+                                                    method='nearest')
 
-        fig = plt.figure(figsize = (8,4))
+        fig = plt.figure(figsize=(8, 4))
 
         ax1 = fig.add_subplot(1, 2, 1)
 
-        pl1 = ax1.pcolormesh(Ugrid, Rgrid, temperatures_gr, cmap=plt.cm.coolwarm, vmin = 300,vmax = 1e5,
-                               linewidth=0)
-        fig.colorbar(pl1)#, shrink=0.5, aspect=5
+        pl1 = ax1.pcolormesh(Ugrid, Rgrid, temperatures_gr, cmap=plt.cm.coolwarm,
+                             norm=mpl.colors.LogNorm(vmin=200, vmax=1e6),
+                             linewidth=1)
+        fig.colorbar(pl1)  # , shrink=0.5, aspect=5
         ax1.set_title('Electron temperature (K)')
         ax1.set_ylabel('Valence electrons per atom')
         ax1.set_xlabel('Inner energy per atom (eV)')
 
         ax2 = fig.add_subplot(1, 2, 2)
 
-
-        pl2 = ax2.pcolormesh(Ugrid, Rgrid, fermi_energies_gr, cmap=plt.cm.seismic, vmin = -20, vmax = 20,
-                               linewidth=0)
-        fig.colorbar(pl2)#, shrink=0.5, aspect=5
+        pl2 = ax2.pcolormesh(Ugrid, Rgrid, fermi_energies_gr, cmap=plt.cm.seismic, vmin=-20, vmax=20,
+                             linewidth=1)
+        fig.colorbar(pl2)  # , shrink=0.5, aspect=5
         ax2.set_title('Fermi energy shift (eV)')
         ax2.set_ylabel('Valence electrons per atom')
         ax2.set_xlabel('Inner energy per atom (eV)')
         plt.tight_layout()
 
+        fig = plt.figure(figsize=(8, 4))
+
+        ax1 = fig.add_subplot(1, 2, 1)
+
+        pl1 = ax1.pcolormesh(temperatures_gr, fermi_energies_gr, self.Ugrid, \
+                             cmap=plt.cm.coolwarm,
+                             linewidth=1)
+        fig.colorbar(pl1)  # , shrink=0.5, aspect=5
+        ax1.set_title('Inner Energy')
+        ax1.set_xlabel('Temperature')
+        ax1.set_ylabel('Fermi Energy')
+
+        ax2 = fig.add_subplot(1, 2, 2)
+
+        pl2 = ax2.pcolormesh(temperatures_gr, fermi_energies_gr, self.Rgrid, cmap=plt.cm.seismic,
+                             linewidth=1)
+        fig.colorbar(pl2)  # , shrink=0.5, aspect=5
+        ax2.set_title('Population')
+        ax2.set_xlabel('Temperature')
+        ax2.set_ylabel('Fermi Energy')
+        plt.tight_layout()
         plt.pause(0.1)
-        plt.show(block = False)
+        plt.show(block=False)
+
+    def generate_lookup_tables(self, N=80, save=True):
+
+        assert np.mod(N, 2) == 0
+        temperatures = np.logspace(0, 6, N - 1) + 300
+        fermis = np.logspace(-3, 1.5, int(N / 2))
+        fermis = np.concatenate((-fermis[::-1], fermis[1:]))
+        print(
+            f'Starting to generate lookup tables for T between {np.min(temperatures):.1f} to {np.max(temperatures):.1f} and Ef between {np.min(fermis):.1f} and {np.max(fermis):.1f}')
+
+        Tgrid, Efgrid = np.meshgrid(temperatures, fermis)
+
+        self.Ugrid = np.empty((N - 1, N - 1))
+        self.Rgrid = np.empty((N - 1, N - 1))
+
+        for iT, T in enumerate(temperatures):
+            for iF, Ef in enumerate(fermis):
+                distr = self.m_j * self.fermi(T, Ef)
+                self.Ugrid[iT, iF] = self.inner_energy(distr)
+                self.Rgrid[iT, iF] = np.sum(distr)
+                # print(T,Ef, '->', self.Ugrid[iT, iF], self.Rgrid[iT, iF])
+
+        self.Upoints = self.Ugrid.T.flatten()
+        self.Rpoints = self.Rgrid.T.flatten()
+        self.precalc_temperatures_points = Tgrid.flatten()
+        self.precalc_fermi_energies_points = Efgrid.flatten()
+        # self.Urange = self.Ugrid[:,0]
+        # self.Rrange = self.Rgrid[0]
+        print('Lookup tables generated.')
+        if save:
+            savename = 'fermi_lookup_table.npz'
+            print(f'Saving at ./{savename}')
+            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints,
+                     Rgrid=self.Rgrid, Ugrid=self.Ugrid,
+                     temp_points=self.precalc_temperatures_points,
+                     ferm_points=self.precalc_fermi_energies_points)
+        self.Rmin = np.min(self.Rgrid)
+        self.Rmax = np.max(self.Rgrid)
+        self.Umin = np.min(self.Ugrid)
+        self.Umax = np.max(self.Ugrid)
+
+    def save_lookup_TEf_from_UR(self, U, R):
+        T, Ef = self.lookup_TEf_from_UR(U, R)
+        self.par0['T'].value = T
+        self.par0['Ef'].value = Ef
+        T, Ef = self.solve(U, R)
+        return T, Ef
 
 ## Main Simulation
 
@@ -461,6 +493,17 @@ class XNLsim:
         self.call_counter = 0
         self.thermal_occupations = None
 
+        # Pre-initialization for efficient memory usage
+        self.res_inter      = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
+        self.nonres_inter   = np.empty((self.par.Nsteps_z, self.par.N_j, self.par.N_photens), dtype = np.float64)
+        self.ch_decay       = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
+        self.el_therm       = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
+        self.el_scatt       = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
+        self.mean_free      = np.empty((self.par.Nsteps_z), dtype = np.float64)
+        self.mean_valence   = np.empty((self.par.Nsteps_z), dtype = np.float64)
+        self.state_vector   = np.empty(self.par.state_vector_0.shape, dtype = np.float64)
+        self.T              = self.par.T_0
+        self.target_distributions = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
     ###################
     ### Processes
     ###################
@@ -476,6 +519,8 @@ class XNLsim:
         :param plot: Boolean to plot results
         :return: incident_pulse_energies, transmitted_pulse_energies
         """
+        global RTOL
+        RTOL = rtol
         ### Solve Main problem
         sol = solve_ivp(self.time_derivative, t_span=t_span, \
                         dense_output=True, y0=self.par.state_vector_0.flatten(), method=method, rtol=rtol,
@@ -561,7 +606,7 @@ class XNLsim:
     # Nonresonant interaction
     def proc_nonres_inter(self, N_Ej, rho_j):
         valence_occupation = rho_j/self.par.R_VB_0 # relative to the number valence states in the ground state
-        if self.DEBUG: check_bounds(valence_occupation, 0, 1, message='valence occupation deviation in proc_nonres_inter()')
+        if self.DEBUG: check_bounds(valence_occupation, message='valence occupation deviation in proc_nonres_inter()')
         #TODO: Somehow avoid this slow loop
         result = np.empty((self.par.Nsteps_z,self.par.N_j, self.par.N_photens))
         for iz in range(self.par.Nsteps_z):
@@ -646,13 +691,16 @@ class XNLsim:
         indirect_augers = ((rho_j * np.outer(np.sum(self.ch_decay, axis = 1),np.ones(self.par.N_j))).T/R_VB).T
         holes_j = self.par.m_j - rho_j
         if np.any(holes_j<0):
-            warnings.warn(f'negative electron hole density found: {holes_j}')
+            mn = np.min(holes_j)
+            if mn<-RTOL:
+                warnings.warn(f'negative electron hole density found down to: {mn}')
             holes_j[holes_j<0]=0
-        holes   = self.par.M_VB - np.sum(rho_j)
+        holes = self.par.M_VB - np.sum(rho_j)
         if holes < 1e-8:
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
-            holes_j *=0
-        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers - indirect_augers + self.el_therm + ((holes_j/holes).T* self.el_scatt).T
+            holes_j *= 0
+        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers -\
+               indirect_augers + self.el_therm + ((holes_j/holes).T* self.el_scatt).T
 
     def rate_core(self):
         return np.sum(self.ch_decay, axis=1) - np.sum(self.res_inter, axis=1)
@@ -713,6 +761,8 @@ class XNLsim:
     ##########################################################
 
     def time_derivative(self, t, state_vector_flat):
+        #if self.DEBUG:
+        print('t: ', t)
         # Reshape the state vector into sensible dimension
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
         check_bounds(self.state_vector[:, 3], 0, np.inf,
@@ -723,16 +773,23 @@ class XNLsim:
             current_rho_j = self.state_vector[iz,3:]
             R = np.sum(current_rho_j)
             U = np.sum(current_rho_j*self.par.E_j)#np.trapz(current_rho_j*self.par.E_j, x = self.par.E_j)
-            self.par.target_distributions[iz,:] = self.par.FermiSolver.lookup_target_distribution(current_rho_j)
-            if self.DEBUG and (iz==0):
-                print(U,R,'->',*self.par.FermiSolver.lookup_TEf_from_UR(U, R))
+            if iz == 0:
+                # When jumping to the surfacem do the safer lookup.
+                T, E_f = self.par.FermiSolver.save_lookup_TEf_from_UR(U,R)
+                if self.DEBUG and (iz == 0):
+                    print(U,R,'->',T, E_f)
+            else:
+                # From then on use the last results as inputs for the solver.
+                T, E_f = self.par.FermiSolver.solve(U,R)
+            self.target_distributions[iz, :] = self.par.FermiSolver.fermi(T, E_f) * self.par.m_j
+
 
         # Calculate photon transmission as save it
         N_Ej_z = self.z_dependence(t, self.state_vector)
 
-        # No longer loop through sample depth
-        #res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence =
-        self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :], self.par.target_distributions)
+        #This calculates (and writs to self.):
+        # res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
+        self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :], self.target_distributions)
 
         derivatives = np.empty(self.state_vector.shape)
         derivatives[:, 0] = self.rate_core()
@@ -840,9 +897,10 @@ class XNLsim:
             for iz in range(self.par.Nsteps_z):
                 U = np.sum(sol.rho_j[iz,:,it]*self.par.E_j)
                 R = sol.R_VB[iz,it]
+                T, Ef = self.par.FermiSolver.save_lookup_TEf_from_UR(U, R)
                 if iz==0:
-                    print(U,R,'->',*self.par.FermiSolver.lookup_TEf_from_UR(U, R))
-                sol.temperatures[it,iz], sol.fermi_energies[it,iz] = self.par.FermiSolver.lookup_TEf_from_UR(U,R)
+                    print(U,R,'->',T, Ef)
+                sol.temperatures[it,iz], sol.fermi_energies[it,iz] = (T, Ef)
             
             
         fig, axes = plt.subplots(2, 2, figsize=(8, 8))

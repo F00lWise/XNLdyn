@@ -19,11 +19,11 @@ if __name__ == '__main__':
 
     PAR.I0 = [XNLdyn.photons_per_J(PAR.E_i[0])*pulse_energy_J,]
 
-    sim = XNLdyn.XNLsim(PAR, DEBUG=True, load_tables=True)
+    sim = XNLdyn.XNLsim(PAR, DEBUG=False, load_tables=False)
 
     PAR.FermiSolver.plot_lookup_tables()
 
-    sim_options = dict(t_span=[-40, 60], method='RK45', rtol=1e-6, atol=1e-8, plot=True, return_full_solution=True)
+    sim_options = dict(t_span=[-30, 40], method='RK45', rtol=1e-3, atol=1e-8, plot=True, return_full_solution=True)
 
     incident, transmitted, sol = sim.run(**sim_options)
 
