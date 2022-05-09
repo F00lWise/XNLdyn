@@ -96,7 +96,8 @@ class XNLpars:
         DoSdata = {}
         DoSdata['enax'] = ld[:, 0]
         DoSdata['DoS'] = ld[:, 1]
-        DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < 3], DoSdata['DoS'][DoSdata['enax'] < 3]) # inteprolate to general enaxis, but extend everything beyond +3eV to constant
+        Dos_constant_from = 0.5
+        DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < Dos_constant_from], DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from]) # inteprolate to general enaxis, but extend everything beyond +3eV to constant
 
         ## mj are normalized by the ground state population
         # Best way to do it: self.DoS = self.R_VB_0* DoS_raw / np.trapz(np.append(DoS_raw[self.E_j<=0],np.interp(0,self.E_j,DoS_raw)), np.append(self.E_j[self.E_j<=0],0))
@@ -911,8 +912,8 @@ class XNLsim:
         plt.sca(axes[0, 0])
         plt.title('State occupation changes')
         plt.pcolormesh(sol.t, PAR.E_j +PAR.E_f,
-                       (sol.rho_j[0])/np.outer(PAR.m_j,np.ones(sol.t.shape)),
-                       cmap = plt.cm.seismic, vmin = -1, vmax = 1, shading = 'nearest')#-np.outer(PAR.rho_j_0,np.ones(sol.t.shape))
+                       (sol.rho_j[0]-np.outer(PAR.rho_j_0,np.ones(sol.t.shape)))/np.outer(PAR.m_j,np.ones(sol.t.shape)),
+                       cmap = plt.cm.seismic, vmin = -1, vmax = 1, shading = 'nearest')#
         plt.colorbar(label = 'Occupacion change')
         plt.xlabel('t (fs)')
         plt.ylabel('Energy (eV)')
@@ -967,11 +968,11 @@ class XNLsim:
         
         plt.sca(axes[2, 0])
         plt.title('Key populations at sample surface')
-        plt.plot(sol.t,sol.core[0]/self.par.M_core, label = 'Core holes')
-        plt.plot(sol.t,(sol.R_VB[0])/self.par.M_VB, label = 'Total Valence')
+        plt.plot(sol.t,sol.core[0]/self.par.M_core,c='red', label='Core holes')
+        plt.plot(sol.t,(sol.R_VB[0])/self.par.M_VB,c='green', label='Total Valence')
         cols = plt.cm.cool(np.linspace(0,1,PAR.N_photens))
         for iE,E in enumerate(self.par.E_i):
-            plt.plot(sol.t,sol.rho_j[0,PAR.resonant,:][iE].T/self.par.m_j[PAR.resonant][iE],c = cols[iE], label = f'rho at {E:.2f}eV')
+            plt.plot(sol.t,sol.rho_j[0,PAR.resonant,:][iE].T/self.par.m_j[PAR.resonant][iE],c=cols[iE], label = f'rho at {E:.2f}eV')
         plt.legend()
 
         plt.sca(axes[2, 1])
