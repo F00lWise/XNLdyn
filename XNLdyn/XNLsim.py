@@ -710,7 +710,7 @@ class XNLsim:
             if mn<-RTOL:
                 warnings.warn(f'negative electron hole density found down to: {mn}')
             holes_j[holes_j<0]=0
-        holes = self.par.M_VB - np.sum(rho_j,1)
+        holes = self.par.M_VB - np.sum(rho_j,1) # the sum over j of holes_j/holes has to be 1
         if np.any(holes < 1e-10):
             #TODO: Check why this triggers often in the very first time step
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
