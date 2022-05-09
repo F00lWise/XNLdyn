@@ -131,7 +131,7 @@ class XNLpars:
                                    self.R_core_0,
                                    self.R_free_0,
                                    self.E_free_0,
-                                   *self.rho_j_0] * self.Nsteps_z).reshape(self.Nsteps_z, self.states_per_voxel)#, dtype=np.long
+                                   *self.rho_j_0] * self.Nsteps_z).reshape(self.Nsteps_z, self.states_per_voxel)
 
         # This is a constant matrix needed in rate_free()
         self.energy_differences = np.zeros((self.Nsteps_z, self.N_j, self.N_photens))
@@ -699,6 +699,7 @@ class XNLsim:
     ### Rates - time derivatives
     ############################
     def rate_j(self):
+        global RTOL
         rho_j = self.state_vector[:, 3:]
         R_VB = np.sum(rho_j, axis=1)
         direct_augers = self.ch_decay
@@ -709,13 +710,14 @@ class XNLsim:
             if mn<-RTOL:
                 warnings.warn(f'negative electron hole density found down to: {mn}')
             holes_j[holes_j<0]=0
-        holes = self.par.M_VB - np.sum(rho_j)
-        if holes < 1e-8:
+        holes = self.par.M_VB - np.sum(rho_j,1)
+        if np.any(holes < 1e-10):
             #TODO: Check why this triggers often in the very first time step
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
-            holes_j *= 0
+            holes_j[holes_j<1e-10] *= 0
+
         return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers -\
-               indirect_augers + self.el_therm + ((holes_j/holes).T* self.el_scatt).T
+               indirect_augers + self.el_therm + ((holes_j.T/holes)* self.el_scatt).T
 
     def rate_core(self):
         return np.sum(self.ch_decay, axis=1) - np.sum(self.res_inter, axis=1)
