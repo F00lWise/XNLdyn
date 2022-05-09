@@ -911,8 +911,8 @@ class XNLsim:
         plt.sca(axes[0, 0])
         plt.title('State occupation changes')
         plt.pcolormesh(sol.t, PAR.E_j +PAR.E_f,
-                       (sol.rho_j[0]-np.outer(PAR.rho_j_0,np.ones(sol.t.shape)))/np.outer(PAR.m_j,np.ones(sol.t.shape)),
-                       cmap = plt.cm.seismic, vmin = -1, vmax = 1, shading = 'nearest')#
+                       (sol.rho_j[0])/np.outer(PAR.m_j,np.ones(sol.t.shape)),
+                       cmap = plt.cm.seismic, vmin = -1, vmax = 1, shading = 'nearest')#-np.outer(PAR.rho_j_0,np.ones(sol.t.shape))
         plt.colorbar(label = 'Occupacion change')
         plt.xlabel('t (fs)')
         plt.ylabel('Energy (eV)')
