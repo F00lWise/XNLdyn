@@ -625,9 +625,17 @@ class XNLsim:
         valence_resonant_occupation_share = (valence_resonant_occupation.T/R_VB).T
         valence_total_occupation_change = R_VB/self.par.R_VB_0
         return (core_holes.T * valence_resonant_occupation_share.T * valence_total_occupation_change).T / self.par.tau_CH
+    
     # Electron Thermalization
     def proc_el_therm(self, rho_j, r_j):
-        return (r_j - rho_j) / self.par.tau_th
+        el_therm = (r_j - rho_j) / self.par.tau_th
+        sum_of_changes = np.sum(el_therm, 1) # This must be zero but can deviate due to numerics
+        if self.DEBUG:
+            global RTOL
+            if np.any(sum_of_changes>RTOL):
+                warnings.warn('Correcting a significant non-zero sum in thermalization')
+        el_therm = el_therm - np.outer(sum_of_changes/self.par.N_j, np.ones(self.par.N_j)) # I simply subtract the average deviation from all
+        return el_therm
 
     # Free electron scattering
     def proc_free_scatt(self, R_free):
@@ -664,7 +672,8 @@ class XNLsim:
         R_free = states[:, 1]
         E_free = states[:, 2]
         rho_j = states[:, 3:]
-
+        
+        #TODO: After thinking about it, an explicit return might be better readible AND faster, since I initialize the variables in the functions
         self.res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
         self.nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
         self.ch_decay = self.proc_ch_decay(R_core, rho_j)
@@ -794,7 +803,8 @@ class XNLsim:
         #This calculates (and writs to self.):
         # res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
         self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :], self.target_distributions)
-
+        
+        
         derivatives = np.empty(self.state_vector.shape)
         derivatives[:, 0] = self.rate_core()
         derivatives[:, 1] = self.rate_free()
