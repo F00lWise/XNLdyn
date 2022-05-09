@@ -131,7 +131,7 @@ class XNLpars:
                                    self.R_core_0,
                                    self.R_free_0,
                                    self.E_free_0,
-                                   *self.rho_j_0] * self.Nsteps_z).reshape(self.Nsteps_z, self.states_per_voxel)
+                                   *self.rho_j_0] * self.Nsteps_z).reshape(self.Nsteps_z, self.states_per_voxel)#, dtype=np.long
 
         # This is a constant matrix needed in rate_free()
         self.energy_differences = np.zeros((self.Nsteps_z, self.N_j, self.N_photens))
@@ -634,7 +634,8 @@ class XNLsim:
             global RTOL
             if np.any(sum_of_changes>RTOL):
                 warnings.warn('Correcting a significant non-zero sum in thermalization')
-        el_therm = el_therm - np.outer(sum_of_changes/self.par.N_j, np.ones(self.par.N_j)) # I simply subtract the average deviation from all
+        correction = np.abs(el_therm)* np.outer(sum_of_changes/np.sum(np.abs(el_therm),1),np.ones(self.par.N_j))
+        el_therm = el_therm - correction # I simply subtract the average deviation from all
         return el_therm
 
     # Free electron scattering
@@ -976,7 +977,7 @@ class XNLsim:
         plt.plot(sol.t,np.mean(sol.core + sol.R_free +sol.R_VB,0))
         plt.ylabel('Electrons')
         plt.xlabel('time (fs)')
-
+        plt.ylim(0,None)
 
         plt.tight_layout()
         plt.show()
