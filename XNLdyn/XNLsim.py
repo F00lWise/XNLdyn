@@ -96,8 +96,10 @@ class XNLpars:
         DoSdata = {}
         DoSdata['enax'] = ld[:, 0]
         DoSdata['DoS'] = ld[:, 1]
-        Dos_constant_from = 0.5
-        DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < Dos_constant_from], DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from]) # inteprolate to general enaxis, but extend everything beyond +3eV to constant
+        Dos_constant_from = 3 # inteprolate to general enaxis, but extend everything beyond +3eV to constant
+        DoSdata['DoS'][DoSdata['enax']>Dos_constant_from] = DoSdata['DoS'][DoSdata['enax']<Dos_constant_from][-1]
+        DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < Dos_constant_from], DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from]) 
+        
 
         ## mj are normalized by the ground state population
         # Best way to do it: self.DoS = self.R_VB_0* DoS_raw / np.trapz(np.append(DoS_raw[self.E_j<=0],np.interp(0,self.E_j,DoS_raw)), np.append(self.E_j[self.E_j<=0],0))
@@ -320,14 +322,14 @@ class FermiSolver:
             raise OSError('Lookup table file not found.')
         self.Upoints = ld['Upoints']
         self.Rpoints = ld['Rpoints']
-        self.Urange = ld['Urange']
-        self.Rrange = ld['Rrange']
+        self.Ugrid = ld['Ugrid']
+        self.Rgrid = ld['Rgrid']
         self.precalc_temperatures_points = ld['temp_points']
         self.precalc_fermi_energies_points = ld['ferm_points']
-        self.Rmin = np.min(self.Rrange)
-        self.Rmax = np.max(self.Rrange)
-        self.Umin = np.min(self.Urange)
-        self.Umax = np.max(self.Urange)
+        self.Rmin = np.min(self.Rpoints)
+        self.Rmax = np.max(self.Rpoints)
+        self.Umin = np.min(self.Upoints)
+        self.Umax = np.max(self.Upoints)
         print('Loaded lookup table successfully.')
 
     def lookup_TEf_from_UR(self, U_is, R_is):
@@ -529,7 +531,7 @@ class XNLsim:
         ### Solve Main problem
         sol = solve_ivp(self.time_derivative, t_span=t_span, \
                         dense_output=True, y0=self.par.state_vector_0.flatten(), method=method, rtol=rtol,
-                        atol=atol)  # DOP853 or RK45
+                        atol=atol, max_step = np.min(self.par.tdur_sig_i))  # DOP853 or RK45
 
         soly = sol.y.reshape((self.par.Nsteps_z, self.par.states_per_voxel, len(sol.t)))
 
@@ -724,10 +726,12 @@ class XNLsim:
         return np.sum(self.ch_decay, axis=1) - np.sum(self.res_inter, axis=1)
 
     def rate_free(self):
+        #TODO: Negative energies appear here, which does not really make sense!
         return np.sum(self.nonres_inter, axis=(1,2)) + np.sum(self.ch_decay, axis = 1) - self.el_scatt
 
     def rate_E_free(self):
         # , nonres_inter, ch_decay, el_scatt, mean_free, mean_valence):
+        #TODO: Secondary electron scattering needs to be implemented!!
 
         #nonres_inter = self.nonres_inter
         #ch_decay = self.ch_decay
@@ -903,8 +907,8 @@ class XNLsim:
                 U = np.sum(sol.rho_j[iz,:,it]*self.par.E_j)
                 R = sol.R_VB[iz,it]
                 T, Ef = self.par.FermiSolver.save_lookup_TEf_from_UR(U, R)
-                if self.DEBUG and (iz==0):
-                    print(U,R,'->',T, Ef)
+                #if self.DEBUG and (iz==0):
+                #    print(U,R,'->',T, Ef)
                 sol.temperatures[it,iz], sol.fermi_energies[it,iz] = (T, Ef)
             
             
@@ -976,11 +980,21 @@ class XNLsim:
         plt.legend()
 
         plt.sca(axes[2, 1])
-        plt.title('Total number of electrons (<z>)')
-        plt.plot(sol.t,np.mean(sol.core + sol.R_free +sol.R_VB,0))
-        plt.ylabel('Electrons')
+        T = (sol.photon_densities[-1]-sol.photon_densities[0])#/np.max(sol.photon_densities[0],1)
+        for iE,E in enumerate(PAR.E_i):
+            plt.plot(sol.t,T[iE],c = cols[iE], label = f'change at {E:.2f} eV')
+        plt.axhline(c='k', lw = 0.3)
+        plt.legend()
+        plt.title('Transmitted - Incident photons')
         plt.xlabel('time (fs)')
-        plt.ylim(0,None)
+        plt.ylabel('Photons per atom')
 
+        #plt.title('Total number of electrons (<z>)')
+        #plt.plot(sol.t,np.mean(sol.core + sol.R_free +sol.R_VB,0))
+        #plt.ylabel('Electrons')
+        #plt.xlabel('time (fs)')
+        #plt.ylim(0,None)
+
+        
         plt.tight_layout()
         plt.show()
