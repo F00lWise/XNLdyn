@@ -692,7 +692,7 @@ class XNLsim:
             should_be_new_energy = mu_electrons[check_z_index]*R_VB + energy_incoming[check_z_index]
             is_new_energy = np.sum((rho_j[check_z_index] + scattering_contribution) * self.par.E_j, 1)[check_z_index]
             print('Deviation from energy conservation (%): ',
-                  100 * np.abs(is_new_energy - should_be_new_energy) / energy_incoming[check_z_index])
+                  100 * np.abs(is_new_energy - should_be_new_energy)[check_z_index] / energy_incoming[check_z_index])
 
         return without_scattering + scattering_contribution
 
@@ -914,7 +914,7 @@ class XNLsim:
         plt.plot(sol.t, np.mean(sol.temperatures, 1), 'C0', label='Temperature')
         plt.plot(sol.t, sol.temperatures[:, 0], 'C1', label='Temperature @ Surface')
         plt.ylabel('T (K)')
-        plt.legend()
+        plt.legend(loc='upper left')
 
         axcp = axes[1, 0].twinx()
         plt.plot(sol.t, np.mean(sol.fermi_energies, 1), 'C2', label='Fermi level shift')
@@ -922,7 +922,7 @@ class XNLsim:
         plt.xlabel('t (fs)')
         plt.ylabel('E (eV)')
 
-        plt.legend()
+        plt.legend(loc='lower left')
 
         plt.sca(axes[1, 1])
         plt.title('Photons')

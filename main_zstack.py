@@ -15,16 +15,16 @@ if __name__ == '__main__':
     N_pulse_energies = 20
     Nsteps_r = 100
 
-    pulse_energy_J = 1e-16 # J
+    pulse_energy_J = 1e-14 # J
 
     PAR.I0_i = [XNLdyn.photons_per_J(PAR.E_i_abs[0])*pulse_energy_J,]
-    print('Photon numbers per atom for this simulation: ', PAR.I0_i/PAR.atomic_density)
+    print('Photon numbers per atom for this simulation: ', np.array(PAR.I0_i)/PAR.atomic_density)
 
-    sim = XNLdyn.XNLsim(PAR, DEBUG=True, load_tables=False)
+    sim = XNLdyn.XNLsim(PAR, DEBUG=False, load_tables=False)
 
-    PAR.FermiSolver.plot_lookup_tables()
+    #PAR.FermiSolver.plot_lookup_tables()
 
-    sim_options = dict(t_span=[-30, 40], method='RK45', rtol=1e-3, atol=1e-8, plot=True, return_full_solution=True)
+    sim_options = dict(t_span=[-30, 40], method='RK45', rtol=1e-4, atol=1e-8, plot=True, return_full_solution=True)
 
     incident, transmitted, sol = sim.run(**sim_options)
 
