@@ -501,13 +501,15 @@ class XNLsim:
         self.thermal_occupations = None
 
         # Pre-initialization for efficient memory usage
+        """
         self.res_inter      = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
         self.nonres_inter   = np.empty((self.par.Nsteps_z, self.par.N_j, self.par.N_photens), dtype = np.float64)
         self.ch_decay       = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
         self.el_therm       = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
-        self.el_scatt       = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
-        self.mean_free      = np.empty((self.par.Nsteps_z), dtype = np.float64)
-        self.mean_valence   = np.empty((self.par.Nsteps_z), dtype = np.float64)
+        self.el_scatt       = np.empty((self.par.Nsteps_z), dtype = np.float64)
+        #self.mean_free      = np.empty((self.par.Nsteps_z), dtype = np.float64)
+        #self.mean_valence   = np.empty((self.par.Nsteps_z), dtype = np.float64)
+        """
         self.state_vector   = np.empty(self.par.state_vector_0.shape, dtype = np.float64)
         self.T              = self.par.T_0
         self.target_distributions = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
@@ -632,13 +634,14 @@ class XNLsim:
     # Electron Thermalization
     def proc_el_therm(self, rho_j, r_j):
         el_therm = (r_j - rho_j) / self.par.tau_th
-        sum_of_changes = np.sum(el_therm, 1) # This must be zero but can deviate due to numerics
+        sum_of_changes = np.sum(el_therm, 1)# This must be zero but can deviate due to numerics
         if self.DEBUG:
             global RTOL
             if np.any(sum_of_changes>RTOL):
                 warnings.warn('Correcting a significant non-zero sum in thermalization')
         correction = np.abs(el_therm)* np.outer(sum_of_changes/np.sum(np.abs(el_therm),1),np.ones(self.par.N_j))
-        el_therm = el_therm - correction # I simply subtract the average deviation from all
+        correction[np.isnan(correction)] = 0
+        el_therm = el_therm- correction # I simply subtract the average deviation from all
         return el_therm
 
     # Free electron scattering
@@ -647,7 +650,7 @@ class XNLsim:
 
     # Mean energy of kinetic electrons
     def mean_free_el_energy(self, R_free, E_free):
-        empty = (R_free < 1e-6) # hardcoded precision limit of 1 µeV
+        empty = (R_free < 1e-9) # hardcoded precision limit of 1 neV
         mean_free = np.empty(R_free.shape)
         mean_free[~empty] = E_free[~empty] / R_free[~empty]
         mean_free[empty] = 0
@@ -678,14 +681,14 @@ class XNLsim:
         rho_j = states[:, 3:]
         
         #TODO: After thinking about it, an explicit return might be better readible AND faster, since I initialize the variables in the functions
-        self.res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
-        self.nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
-        self.ch_decay = self.proc_ch_decay(R_core, rho_j)
-        self.el_therm = self.proc_el_therm(rho_j, r_j)
-        self.el_scatt = self.proc_free_scatt(R_free)
-        self.mean_free = self.mean_free_el_energy(R_free, E_free)
-        self.mean_valence = self.mean_valence_energy(rho_j)
-        #return res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
+        res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
+        nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
+        ch_decay = self.proc_ch_decay(R_core, rho_j)
+        el_therm = self.proc_el_therm(rho_j, r_j)
+        el_scatt = self.proc_free_scatt(R_free)
+        en_free = self.mean_free_el_energy(R_free, E_free)
+
+        return res_inter, nonres_inter, ch_decay, el_therm, el_scatt, en_free
 
     def rate_N_dz_j_direct(self, N_Ej, states):
         """
@@ -701,12 +704,12 @@ class XNLsim:
     ############################
     ### Rates - time derivatives
     ############################
-    def rate_j(self):
+    def rate_j(self,res_inter,nonres_inter,ch_decay,el_therm,el_scatt):
         global RTOL
         rho_j = self.state_vector[:, 3:]
         R_VB = np.sum(rho_j, axis=1)
-        direct_augers = self.ch_decay
-        indirect_augers = ((rho_j * np.outer(np.sum(self.ch_decay, axis = 1),np.ones(self.par.N_j))).T/R_VB).T
+        direct_augers = ch_decay
+        indirect_augers = ((rho_j * np.outer(np.sum(ch_decay, axis = 1),np.ones(self.par.N_j))).T/R_VB).T
         holes_j = self.par.m_j - rho_j
         if np.any(holes_j<0):
             mn = np.min(holes_j)
@@ -719,19 +722,19 @@ class XNLsim:
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
             holes_j[holes_j<1e-10] *= 0
 
-        return self.res_inter - np.sum(self.nonres_inter, axis = 2) - direct_augers -\
-               indirect_augers + self.el_therm + ((holes_j.T/holes)* self.el_scatt).T
+        return res_inter - np.sum(nonres_inter, axis = 2) - direct_augers -\
+               indirect_augers + el_therm + ((holes_j.T/holes)* el_scatt).T
 
-    def rate_core(self):
-        return np.sum(self.ch_decay, axis=1) - np.sum(self.res_inter, axis=1)
+    def rate_core(self, res_inter, ch_decay):
+        return np.sum(ch_decay, axis=1) - np.sum(res_inter, axis=1)
 
-    def rate_free(self):
-        #TODO: Negative energies appear here, which does not really make sense!
-        return np.sum(self.nonres_inter, axis=(1,2)) + np.sum(self.ch_decay, axis = 1) - self.el_scatt
+    def rate_free(self, nonres_inter, ch_decay, el_scatt):
+        return np.sum(nonres_inter, axis=(1,2)) + np.sum(ch_decay, axis = 1) - el_scatt
 
-    def rate_E_free(self):
-        # , nonres_inter, ch_decay, el_scatt, mean_free, mean_valence):
+    def rate_E_free(self, nonres_inter, ch_decay, el_scatt):
+        # ):
         #TODO: Secondary electron scattering needs to be implemented!!
+        #TODO: Negative energies appear here, which does not really make sense!
 
         #nonres_inter = self.nonres_inter
         #ch_decay = self.ch_decay
@@ -742,9 +745,9 @@ class XNLsim:
 
         result = np.zeros(self.par.Nsteps_z)
         interesting = R_free > 0
-        result[interesting] = np.sum(self.nonres_inter[interesting] * self.par.energy_differences[interesting], axis = (1,2))\
-               + np.sum(self.ch_decay * self.par.E_j, axis = 1)[interesting]\
-               - self.el_scatt[interesting]*E_free[interesting]/R_free[interesting]
+        result[interesting] = np.sum(nonres_inter[interesting] * self.par.energy_differences[interesting], axis = (1,2))\
+               + np.sum(ch_decay * self.par.E_j, axis = 1)[interesting]\
+               - el_scatt[interesting]*E_free[interesting]/R_free[interesting]
         return result
 
 
@@ -810,14 +813,14 @@ class XNLsim:
 
         #This calculates (and writs to self.):
         # res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
-        self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :], self.target_distributions)
+        res_inter, nonres_inter, ch_decay, el_therm, el_scatt, en_free = self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :], self.target_distributions)
         
         
         derivatives = np.empty(self.state_vector.shape)
-        derivatives[:, 0] = self.rate_core()
-        derivatives[:, 1] = self.rate_free()
-        derivatives[:, 2] = self.rate_E_free()
-        derivatives[:, 3:] = self.rate_j()
+        derivatives[:, 0] = self.rate_core(res_inter, ch_decay)
+        derivatives[:, 1] = self.rate_free(nonres_inter, ch_decay, el_scatt)
+        derivatives[:, 2] = self.rate_E_free(nonres_inter, ch_decay, el_scatt)
+        derivatives[:, 3:] = self.rate_j(res_inter,nonres_inter,ch_decay,el_therm,el_scatt)
 
         # Debug plotting
         if self.intermediate_plots:
