@@ -43,6 +43,7 @@ class XNLpars:
         self.atomic_density = atomic_density  # atoms per nm³
         self.photon_bandwidth = photon_bandwidth  # The energy span of the valence band that each resonant energy interacts with./ eV
         self.temperature = temperature  # Kelvin
+        self.work_function = work_function
 
         ## Electronic state numbers per atom
         self.M_core = core_states
@@ -69,7 +70,7 @@ class XNLpars:
         assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_i) == len(lambda_res_Ei)), \
             'Make sure all photon pulses get all parameters!'
 
-    def make_derived_params(self, sim):
+    def make_derived_params(self):
         ## now some derived quantities
         self.zstepsize = self.Z / self.Nsteps_z
         self.zaxis = np.arange(0, self.Z, self.zstepsize)
@@ -98,10 +99,24 @@ class XNLpars:
         DoSdata = {}
         DoSdata['enax'] = ld[:, 0]
         DoSdata['DoS'] = ld[:, 1]
-        Dos_constant_from = 3  # inteprolate to general enaxis, but extend everything beyond +3eV to constant
-        DoSdata['DoS'][DoSdata['enax'] > Dos_constant_from] = DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from][-1]
-        DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < Dos_constant_from],
-                            DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from])
+        # Dos_constant_from = 3  # inteprolate to general enaxis, but extend everything beyond +3eV to constant
+        # DoSdata['DoS'][DoSdata['enax'] > Dos_constant_from] = DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from][-1]
+        # DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < Dos_constant_from],
+        #                     DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from])
+        #
+        DoS_raw = np.interp(self.E_j, DoSdata['enax'], DoSdata['DoS'])
+        def D_free(eV):
+            joule = eV * self.echarge
+            me = 9.1093837e-31  # Kg
+            hbar = 1.054571817e-34  # Kg m /s^2
+            V = 1e-27  # 1 nm^3 in m^3
+            term1 = V / (self.atomic_density * 2 * np.pi ** 2)
+            term2 = (2 * me / hbar ** 2) ** (3 / 2)
+            with np.errstate(invalid='ignore'):
+                res = term1 * term2 * np.sqrt(joule) * self.echarge  # Return DoS in states per atom and eV
+            res[eV <= 0] = 0
+            return res
+        DoS_raw = DoS_raw + D_free(self.E_j - self.work_function)
 
         ## mj are normalized by the ground state population
         enax_dE = self.enax_j_edges[1:] - self.enax_j_edges[:-1]
@@ -112,7 +127,7 @@ class XNLpars:
         self.m_j *= valence_GS_occupation / occupied  # scale to ground state occupation
         self.M_VB = np.sum(self.m_j)
 
-        self.FermiSolver = FermiSolver(self, self.m_j)
+        self.FermiSolver = FermiSolver(self)
 
         ## Initial populations
         self.R_core_0 = self.M_core  # Initially fully occupied
@@ -161,7 +176,7 @@ class XNLpars:
         return result
 
     def make_valence_energy_axis(self, N_j: int, min=Energy_axis_min, finemax=Energy_axis_fine_until,
-                                 max=Energy_axis_max):
+                                 max=Energy_axis_max, photon_bandwidth=photon_bandwidth):
         """
             Creates an energy axis for the valence band, namely
                 self.E_j
@@ -179,30 +194,61 @@ class XNLpars:
         N_j_fine = int(N_j * 3 / 4)
         N_j_coarse = int(N_j - N_j_fine)
 
-        def fill_biggest_gap(pointlist):
+        def fill_biggest_gap(pointlist, resonances: list):
             """
             This function takes a list of points and appends a point in the middle of the biggest gap
             """
-            pointlist = np.array(np.sort(pointlist))
+            pointlist = np.array(pointlist)
             gaps = pointlist[1:] - pointlist[:-1]
+            size_order = np.argsort(gaps)
+            next_to_resonance = [((pointlist[ig] in resonances) or (pointlist[ig + 1] in resonances)) for ig, g in
+                                 enumerate(gaps)]
+            gaps[next_to_resonance] = 0
             biggest_gap_index = np.argsort(gaps)[-1]
-            biggest_gap = gaps[biggest_gap_index]
+            biggest_gap = gaps[biggest_gap_index]  # np.sort(gaps[~next_to_resonance])[-1]
             list_before = pointlist[:biggest_gap_index + 1]
             new_value = pointlist[biggest_gap_index] + 0.5 * biggest_gap
             list_after = pointlist[biggest_gap_index + 1:]
             return np.concatenate((list_before, [new_value, ], list_after))
 
+        def set_initial_points(resonances: list, min: float, max: float, skip: list = []):
+            """
+            Enforce that specified energies have a size of by at least <photon_bandwith>
+            unless they are too close together for that
+            """
+            points = list(np.sort([min, max] + skip + resonances))
+            points_to_add = []
+            for i, e in enumerate(points):
+                # Skip first and last
+                if (i == 0) or (e == max) or (e in skip):
+                    continue
+                De_to_last = e - points[i - 1]
+                if De_to_last > 2 * photon_bandwidth:
+                    points_to_add.append(e - photon_bandwidth)
+                else:
+                    print(
+                        f'Energy {e:.2f} too close to others to satisfy the resonant bandwidth of {photon_bandwidth:.2f}')
+                De_to_next = points[i + 1] - e
+                if De_to_next > 2 * photon_bandwidth:
+                    points_to_add.append(e + photon_bandwidth)
+                else:
+                    print(
+                        f'Energy {e:.2f} too close to others to satisfy the resonant bandwidth of {photon_bandwidth:.2f}')
+            return np.sort(np.append(points, points_to_add))
+
         # The energies E_i and 0 must be in the axis
-        enax_j_fine = [min, 0, finemax] + list(self.E_i[self.E_i <= finemax])
+        enax_j_fine = set_initial_points(list(self.E_i[self.E_i <= finemax]), min=min, max=finemax, skip=[0])
+
         # Fill up the gaps
         while len(enax_j_fine) < N_j_fine:
-            enax_j_fine = fill_biggest_gap(enax_j_fine)
+            enax_j_fine = fill_biggest_gap(enax_j_fine, list(self.E_i[self.E_i <= finemax]))
 
         dE = np.mean(enax_j_fine[1:] - enax_j_fine[:-1])
         # The same for the coarse part
-        enax_j_coarse = [finemax + dE, max] + list(self.E_i[self.E_i > finemax])
+        enax_j_coarse = set_initial_points(list(self.E_i[self.E_i > finemax]), min=finemax + dE, max=max)
+
         while len(enax_j_coarse) < N_j_coarse:
-            enax_j_coarse = fill_biggest_gap(enax_j_coarse)
+            enax_j_coarse = fill_biggest_gap(enax_j_coarse, list(self.E_i[self.E_i > finemax]))
 
         enax_j = np.concatenate((enax_j_fine, enax_j_coarse))
 
@@ -221,19 +267,18 @@ class XNLpars:
 
         return enax_j, edgepoints(enax_j)
 
-
 class FermiSolver:
     """
     This class finds the target "thermal equilibrium" electron distribution in the valence band for any given distribution or a set of inner energy and population
     """
 
-    def __init__(self, par, m_j, DEBUG=False):
+    def __init__(self, par, DEBUG=False):
         self.par0 = lmfit.Parameters()
         self.par0.add('T', value=350, min=300, max=1e6)
         self.par0.add('Ef', value=1, min=-9, max=20)
         self.par = par
         self.enax = par.E_j
-        self.m_j = m_j
+        self.m_j = par.m_j
         self.kB = 8.617333262145e-5
         self.DEBUG = DEBUG
 
@@ -269,6 +314,7 @@ class FermiSolver:
         return ur, rr
 
     def solve(self, U, R):
+        global RTOL
         # print(f'Looking for a solution for U: {U}, R:{R}')
         res = lmfit.minimize(self.optimizable, self.par0, args=(U, R), method='nelder')  # powell
         ## Check for large residuals
@@ -280,16 +326,16 @@ class FermiSolver:
             if self.DEBUG: print(f'Residual in R remained significant ({res_R}) Setting to NaN')
             return np.nan, np.nan
         ## Check for running into parameter limits
-        if res.params['T'].value < res.params['T'].min + 1e-6:
+        if res.params['T'].value < res.params['T'].min + RTOL:
             if self.DEBUG: print('Minimum T reached!')
             return np.nan, np.nan
-        if res.params['T'].value > res.params['T'].max - 1e-6:
+        if res.params['T'].value > res.params['T'].max - RTOL:
             if self.DEBUG: print('Maximum T reached!')
             return np.nan, np.nan
-        if res.params['Ef'].value < res.params['Ef'].min + 1e-6:
+        if res.params['Ef'].value < res.params['Ef'].min + RTOL:
             if self.DEBUG: print('Minimum Ef reached!')
             return np.nan, np.nan
-        if res.params['Ef'].value > res.params['Ef'].max - 1e-6:
+        if res.params['Ef'].value > res.params['Ef'].max - RTOL:
             if self.DEBUG: print('Maximum Ef reached!')
             return np.nan, np.nan
         if not res.success:
@@ -474,7 +520,7 @@ class XNLsim:
         self.DEBUG = DEBUG
         self.intermediate_plots = False
         self.par = par
-        self.par.make_derived_params(self)
+        self.par.make_derived_params()
 
         if load_tables:
             try:
@@ -496,7 +542,7 @@ class XNLsim:
         self.call_counter = 0
         self.thermal_occupations = None
 
-        # Pre-initialization for efficient memory usage
+        # Pre-initialization for efficient memory usage - no longer done but its a good overview
         """
         self.res_inter      = np.empty((self.par.Nsteps_z, self.par.N_j), dtype = np.float64)
         self.nonres_inter   = np.empty((self.par.Nsteps_z, self.par.N_j, self.par.N_photens), dtype = np.float64)
