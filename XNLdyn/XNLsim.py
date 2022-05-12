@@ -110,21 +110,23 @@ class XNLpars:
             me = 9.1093837e-31  # Kg
             hbar = 1.054571817e-34  # Kg m /s^2
             V = 1e-27  # 1 nm^3 in m^3
-            term1 = V / (self.atomic_density * 2 * np.pi ** 2)
+            term1 = V / (self.atomic_density * 2 * np.pi ** 2) #TODO: Dieser Faktor unterscheidet sich von PHYSICAL REVIEW E 102, 063204 (2020) eq. 2 - check warum!
             term2 = (2 * me / hbar ** 2) ** (3 / 2)
             with np.errstate(invalid='ignore'):
                 res = term1 * term2 * np.sqrt(joule) * self.echarge  # Return DoS in states per atom and eV
             res[eV <= 0] = 0
             return res
-        DoS_raw = DoS_raw + D_free(self.E_j - self.work_function)
+        DoS_raw = DoS_raw #+  D_free(self.E_j - self.work_function)#
 
         ## mj are normalized by the ground state population
-        enax_dE = self.enax_j_edges[1:] - self.enax_j_edges[:-1]
-        self.m_j = DoS_raw * enax_dE  # scale with energy step size
+        self.enax_dE_j = self.enax_j_edges[1:] - self.enax_j_edges[:-1]
+        self.m_j = DoS_raw * self.enax_dE_j  # scale with energy step size
         occupied = (np.sum(self.m_j[self.E_j < 0]) + 0.5 * self.m_j[self.E_j == 0]) / np.sum(
             self.m_j)  # part that is occupied in GS
         self.m_j = self.m_j / np.sum(self.m_j)  # normalize to one to be sure
         self.m_j *= valence_GS_occupation / occupied  # scale to ground state occupation
+        #TODO: Implement this more properly! FEG solution starts where DFT DoS stops
+        self.m_j[self.E_j>5] = D_free(self.E_j - self.work_function)[self.E_j>5]* self.enax_dE_j[self.E_j>5]
         self.M_VB = np.sum(self.m_j)
 
         self.FermiSolver = FermiSolver(self)
@@ -237,7 +239,7 @@ class XNLpars:
             return np.sort(np.append(points, points_to_add))
 
         # The energies E_i and 0 must be in the axis
-        enax_j_fine = set_initial_points(list(self.E_i[self.E_i <= finemax]), min=min, max=finemax, skip=[0])
+        enax_j_fine = set_initial_points(list(self.E_i[self.E_i <= finemax]), min=min, max=finemax, skip=[0])# TODO: Check if normalization is ok without the 
 
         # Fill up the gaps
         while len(enax_j_fine) < N_j_fine:
@@ -468,7 +470,7 @@ class FermiSolver:
     def generate_lookup_tables(self, N=100, save=True):
 
         assert np.mod(N, 2) == 0
-        temperatures = np.logspace(0, 7, N - 1) + 300
+        temperatures = np.logspace(0, 6, N - 1) + 300
         fermis = np.logspace(-3, 1.5, int(N / 2))
         fermis = np.concatenate((-fermis[::-1], fermis[1:]))
         print(
@@ -506,9 +508,14 @@ class FermiSolver:
         self.Umax = np.max(self.Ugrid)
 
     def save_lookup_TEf_from_UR(self, U, R):
-        T, Ef = self.lookup_TEf_from_UR(U, R)
-        self.par0['T'].value = T
-        self.par0['Ef'].value = Ef
+        try:
+            T, Ef = self.lookup_TEf_from_UR(U, R)
+            self.par0['T'].value = T
+            self.par0['Ef'].value = Ef
+        except:
+            print('Lookup failed. Attempting direct solve with GS parameters.')
+            self.par0['T'].value = 300
+            self.par0['Ef'].value = 0
         T, Ef = self.solve(U, R)
         return T, Ef
 
