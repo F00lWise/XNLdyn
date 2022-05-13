@@ -44,6 +44,8 @@ class XNLpars:
         self.photon_bandwidth = photon_bandwidth  # The energy span of the valence band that each resonant energy interacts with./ eV
         self.temperature = temperature  # Kelvin
         self.work_function = work_function
+        self.DoS_band_origin = DoS_band_origin
+        self.DoS_band_dd_end = DoS_band_dd_end
 
         ## Electronic state numbers per atom
         self.M_core = core_states
@@ -126,7 +128,8 @@ class XNLpars:
         self.m_j = self.m_j / np.sum(self.m_j)  # normalize to one to be sure
         self.m_j *= valence_GS_occupation / occupied  # scale to ground state occupation
         #TODO: Implement this more properly! FEG solution starts where DFT DoS stops
-        self.m_j[self.E_j>5] = D_free(self.E_j - self.work_function)[self.E_j>5]* self.enax_dE_j[self.E_j>5]
+        self.m_j[self.E_j>self.DoS_band_dd_end] = D_free(self.E_j - self.DoS_band_origin)[self.E_j>self.DoS_band_dd_end]* self.enax_dE_j[self.E_j>self.DoS_band_dd_end]
+
         self.M_VB = np.sum(self.m_j)
 
         self.FermiSolver = FermiSolver(self)

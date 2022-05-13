@@ -6,7 +6,6 @@ Z = 25 #Sample thickness in nm
 atomic_density = 91.4 # atoms per nm³
 photon_bandwidth = 0.4 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
 temperature = 300 # Kelvin
-work_function = -5.15 # eV
 
 # Electronic state numbers per atom
 core_states = 2
@@ -14,6 +13,9 @@ core_states = 2
 valence_GS_occupation = 10
 
 DoS_shapefile = './DoSdata.npy'
+#work_function = -5.15 # eV
+DoS_band_origin = -10 #eV
+DoS_band_dd_end = 5.15
 
 ## Rates and cross sections
 
