@@ -37,6 +37,8 @@ class XNLpars:
 
         self.N_j = N_j
 
+        self.timestep_min = timestep_min
+
         ## Sample thickness
         self.Z = Z  # nm
 
@@ -76,6 +78,7 @@ class XNLpars:
         ## now some derived quantities
         self.zstepsize = self.Z / self.Nsteps_z
         self.zaxis = np.arange(0, self.Z, self.zstepsize)
+        self.zedges = np.arange(0, self.Z+self.zstepsize, self.zstepsize)
 
         self.E_i = np.array(self.E_i_abs) - self.E_f  # self.E_i becomes relative to Fermi edge
         # Energy Axis
@@ -127,8 +130,9 @@ class XNLpars:
             self.m_j)  # part that is occupied in GS
         self.m_j = self.m_j / np.sum(self.m_j)  # normalize to one to be sure
         self.m_j *= valence_GS_occupation / occupied  # scale to ground state occupation
-        #TODO: Implement this more properly! FEG solution starts where DFT DoS stops
-        self.m_j[self.E_j>self.DoS_band_dd_end] = D_free(self.E_j - self.DoS_band_origin)[self.E_j>self.DoS_band_dd_end]* self.enax_dE_j[self.E_j>self.DoS_band_dd_end]
+        # FEG solution starts where DFT DoS stops
+        self.m_j[self.E_j>self.DoS_band_dd_end] = D_free(self.E_j - self.DoS_band_origin)[self.E_j>self.DoS_band_dd_end]* \
+                                                  self.enax_dE_j[self.E_j>self.DoS_band_dd_end]
 
         self.M_VB = np.sum(self.m_j)
 
@@ -140,6 +144,7 @@ class XNLpars:
         self.E_free_0 = 0  # Initial energy of kinetic electrons, Initally zero
         self.rho_j_0 = self.m_j * self.FermiSolver.fermi(temperature, 0)  # occupied acording to initial temperature
 
+        #self.plot_dos()
         ## derived from these
         self.T_0 = temperature  # Initial thermal energy of the average valence electron
 
@@ -242,7 +247,8 @@ class XNLpars:
             return np.sort(np.append(points, points_to_add))
 
         # The energies E_i and 0 must be in the axis
-        enax_j_fine = set_initial_points(list(self.E_i[self.E_i <= finemax]), min=min, max=finemax, skip=[0])# TODO: Check if normalization is ok without the 
+        enax_j_fine = set_initial_points(list(self.E_i[self.E_i <= finemax]), min=min, max=finemax, skip=[0])
+        # TODO: Can I avoid the necessity to include 0 so i can simulate resonances close to 0?
 
         # Fill up the gaps
         while len(enax_j_fine) < N_j_fine:
@@ -271,6 +277,14 @@ class XNLpars:
             return edges
 
         return enax_j, edgepoints(enax_j)
+
+    def plot_dos(self):
+        plt.figure()
+        plt.plot(self.E_j, self.m_j/self.enax_dE_j, '.-', label='m_j')
+        plt.plot(self.E_j, self.rho_j_0/self.enax_dE_j, ':', label='rho_j_0')
+        plt.axvline(0)
+        plt.legend()
+        plt.pause(0.1)
 
 class FermiSolver:
     """
@@ -473,7 +487,7 @@ class FermiSolver:
     def generate_lookup_tables(self, N=100, save=True):
 
         assert np.mod(N, 2) == 0
-        temperatures = np.logspace(0, 6, N - 1) + 300
+        temperatures = np.logspace(0, 6, N - 1) + 295
         fermis = np.logspace(-3, 1.5, int(N / 2))
         fermis = np.concatenate((-fermis[::-1], fermis[1:]))
         print(
@@ -585,12 +599,12 @@ class XNLsim:
         ### Solve Main problem
         sol = solve_ivp(self.time_derivative, t_span=t_span,
                         dense_output=True, y0=self.par.state_vector_0.flatten(), method=method, rtol=rtol,
-                        atol=atol, max_step=np.min(self.par.tdur_sig_i))  # DOP853 or RK45
+                        atol=atol, max_step=self.par.timestep_min)  # DOP853 or RK45
 
         soly = sol.y.reshape((self.par.Nsteps_z, self.par.states_per_voxel, len(sol.t)))
 
         ### Since they weren't saved, calculate transmission again
-        sol_photon_densities = np.zeros((self.par.Nsteps_z, self.par.N_photens, len(sol.t)))
+        sol_photon_densities = np.zeros((self.par.Nsteps_z+1, self.par.N_photens, len(sol.t)))
         for it, t in enumerate(sol.t):
             sol_photon_densities[:, :, it] = self.z_dependence(t, soly[:, :, it])[:, self.par.resonant]
 
@@ -685,7 +699,6 @@ class XNLsim:
         E_free = states[:, 2]
         rho_j = states[:, 3:]
         
-        #TODO: After thinking about it, an explicit return might be better readible AND faster, since I initialize the variables in the functions
         res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
         nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
         ch_decay = self.proc_ch_decay(R_core, rho_j)
@@ -747,8 +760,9 @@ class XNLsim:
             print('Deviation from electron conservation: ', np.sum(scattering_contribution, 1)[check_z_index])
             should_be_new_energy = mu_electrons[check_z_index]*R_VB + energy_incoming[check_z_index]
             is_new_energy = np.sum((rho_j[check_z_index] + scattering_contribution) * self.par.E_j, 1)[check_z_index]
-            print('Deviation from energy conservation (%): ',
-                  100 * np.abs(is_new_energy - should_be_new_energy)[check_z_index] / energy_incoming[check_z_index])
+            with np.errstate(invalid='ignore'):
+                print('Deviation from energy conservation (%): ',
+                      100 * np.abs(is_new_energy - should_be_new_energy)[check_z_index] / energy_incoming[check_z_index])
 
         return without_scattering + scattering_contribution
 
@@ -760,9 +774,6 @@ class XNLsim:
 
     def rate_E_free(self, nonres_inter, ch_decay, el_scatt):
         # TODO: Negative energies at beginning of simulation - strange!
-        # nonres_inter = self.nonres_inter
-        # ch_decay = self.ch_decay
-        # scatt = self.el_scatt
 
         R_free = self.state_vector[:, 1]
         E_free = self.state_vector[:, 2]
@@ -793,7 +804,7 @@ class XNLsim:
             return N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4)
 
         # get current photon irradiation:
-        N_Ej_z = np.zeros((self.par.Nsteps_z, self.par.N_j))
+        N_Ej_z = np.zeros((self.par.Nsteps_z+1, self.par.N_j))
 
         N_Ej_z[0, :] = self.par.pulse_profiles(t)  # momentary photon densities at time t for each photon energy
 
@@ -803,6 +814,7 @@ class XNLsim:
         N_Ej_z[1, :] = zstep_euler(self, N_Ej_z[0, :], state_vector, 0)  # First step with euler
         for iz in range(2, self.par.Nsteps_z):
             N_Ej_z[iz, :] = double_zstep_RK(self, N_Ej_z[iz - 2, :], state_vector, iz - 2)
+        N_Ej_z[-1, :] = zstep_euler(self, N_Ej_z[-2, :], state_vector, self.par.Nsteps_z-1)  # Last step back into vacuum with euler
 
         return N_Ej_z
 
@@ -817,7 +829,7 @@ class XNLsim:
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
 
         # Determine thermalized distributions
-        for iz, z in enumerate(self.par.zaxis):
+        for iz, z in enumerate(self.par.zaxis[:]):
             current_rho_j = self.state_vector[iz, 3:]
             if np.any(current_rho_j < -RTOL):
                 warnings.warn('Negative state density!')
@@ -841,7 +853,7 @@ class XNLsim:
         N_Ej_z = self.z_dependence(t, self.state_vector)
 
         # res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
-        res_inter, nonres_inter, ch_decay, el_therm, el_scatt, en_free = self.calc_processes(N_Ej_z[:, :], self.state_vector[:, :], self.target_distributions)
+        res_inter, nonres_inter, ch_decay, el_therm, el_scatt, en_free = self.calc_processes(N_Ej_z[:-1, :], self.state_vector[:, :], self.target_distributions)
         
         
         derivatives = np.empty(self.state_vector.shape)
@@ -872,10 +884,11 @@ class XNLsim:
         else:
             plt.sca(self.axis_z)
 
-        plt.plot(self.par.zaxis, N_Ej_z)
+        plt.plot(self.par.zedges, N_Ej_z[:,self.par.resonant])
         plt.xlabel('z')
         plt.ylabel('Photon density')
         self.axis_z.set_title(f'Z-Dependence')
+        print(f'Transmission = {100* N_Ej_z[:,self.par.resonant][-1]/N_Ej_z[:,self.par.resonant][0]} %')
 
     def plot_occupancies(self, state_vector):
         if not 'figure_occ' in dir(self):

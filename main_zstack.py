@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import multiprocessing as mp
 from multiprocessing import Pool
 
-
+# TODO: Simulate low-intensity spectrum
+# TODO: Is there REALLY nothing wrong with the heat capacity?
 
 if __name__ == '__main__':
 
@@ -15,12 +16,12 @@ if __name__ == '__main__':
     N_pulse_energies = 20
     Nsteps_r = 100
 
-    pulse_energy_J = 3e-20 # J
+    pulse_energy_J = 3e-17 # J
 
     PAR.I0_i = [XNLdyn.photons_per_J(PAR.E_i_abs[0])*pulse_energy_J]
     print('Photon numbers per atom for this simulation: ', np.array(PAR.I0_i)/PAR.atomic_density)
 
-    sim = XNLdyn.XNLsim(PAR, DEBUG=True, load_tables=True)
+    sim = XNLdyn.XNLsim(PAR, DEBUG=True, load_tables=False)
 
     #PAR.FermiSolver.plot_lookup_tables()
 

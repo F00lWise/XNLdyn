@@ -1,8 +1,9 @@
 Nsteps_z = 10     # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
+timestep_min = 1 #fs
 ## Sample data
-Z = 25 #Sample thickness in nm
+Z = 10 #Sample thickness in nm
 atomic_density = 91.4 # atoms per nm³
 photon_bandwidth = 0.4 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
 temperature = 300 # Kelvin
