@@ -4,9 +4,9 @@ N_photens= 1      # Number of distinct incident resonant photon energies E_i
 timestep_min = 1 #fs
 ## Sample data
 Z = 10 #Sample thickness in nm
-atomic_density = 91.4 # atoms per nm³
+atomic_density = 91.4  # atoms per nm³
 photon_bandwidth = 0.4 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
-temperature = 300 # Kelvin
+temperature = 300      # Kelvin
 
 # Electronic state numbers per atom
 core_states = 2
@@ -20,11 +20,11 @@ DoS_band_dd_end = 5.15
 
 ## Rates and cross sections
 
-tau_CH = 10       # Core hole lifetime / fs
-tau_th = 3     # Redistribution time of electrons in the VB / fs
-tau_free = 10  # Free electron lifetime
+tau_CH = 10            # Core hole lifetime / fs
+tau_th = 3             # Redistribution time of electrons in the VB / fs
+tau_free = 10          # Free electron lifetime
 lambda_res_Ei = (10,)  # Absorptions length of resonant photon energies / nm
-lambda_nonres = 500    # Absorption length of non-resonant photons, assumed equal for all / nm
+lambda_nonres = 190    # Absorption length of non-resonant photons, assumed equal for all / nm
 
 
 ## Fermi Energy

@@ -13,6 +13,8 @@ np.errstate(divide='raise')  # Raise division by zero as error if nominator is n
 
 RTOL = 1e-5
 
+#TODO: Work on the problem that some energy values do not work when they are close to set values.
+
 
 def check_bounds(value, min=0 - RTOL, max=1. + RTOL, message=''):
     if np.any(value < min):
