@@ -43,7 +43,7 @@ class XNLpars:
         self.atomic_density = atomic_density  # atoms per nm³
         self.photon_bandwidth = photon_bandwidth  # The energy span of the valence band that each resonant energy interacts with./ eV
         self.temperature = temperature  # Kelvin
-        self.work_function = work_function
+        #self.work_function = work_function
         self.DoS_band_origin = DoS_band_origin
         self.DoS_band_dd_end = DoS_band_dd_end
 
