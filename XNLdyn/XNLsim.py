@@ -115,7 +115,7 @@ class XNLpars:
             me = 9.1093837e-31  # Kg
             hbar = 1.054571817e-34  # Kg m /s^2
             V = 1e-27  # 1 nm^3 in m^3
-            term1 = V / (self.atomic_density * 2 * np.pi ** 2) #TODO: Dieser Faktor unterscheidet sich von PHYSICAL REVIEW E 102, 063204 (2020) eq. 2 - check warum!
+            term1 = V / (self.atomic_density * 2 * np.pi ** 2)
             term2 = (2 * me / hbar ** 2) ** (3 / 2)
             with np.errstate(invalid='ignore'):
                 res = term1 * term2 * np.sqrt(joule) * self.echarge  # Return DoS in states per atom and eV
