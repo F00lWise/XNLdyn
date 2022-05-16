@@ -632,12 +632,12 @@ class XNLsim:
 
     # Nonresonant interaction
     def proc_nonres_inter(self, N_Ej, rho_j):
-        valence_occupation = rho_j / self.par.R_VB_0  # relative to the number valence states in the ground state
-        if self.DEBUG: check_bounds(valence_occupation, message='valence occupation deviation in proc_nonres_inter()')
+        valence_change_to_GS = rho_j / self.par.R_VB_0  # relative to the number valence states in the ground state
+        if self.DEBUG: check_bounds(valence_change_to_GS, message='valence occupation deviation in proc_nonres_inter()')
         # TODO: Somehow avoid this slow loop
         result = np.empty((self.par.Nsteps_z, self.par.N_j, self.par.N_photens))
         for iz in range(self.par.Nsteps_z):
-            result[iz] = np.outer(valence_occupation[iz], N_Ej[iz, self.par.resonant])
+            result[iz] = np.outer(valence_change_to_GS[iz], N_Ej[iz, self.par.resonant])
         return result / self.par.lambda_nonres  # returns z, j,i
 
     # Core-hole decay
@@ -715,10 +715,17 @@ class XNLsim:
         """
         R_core, R_free, E_free = states[0:3]
         rho_j = states[3:]
+
+        # Resonant
         core_occupation = (R_core / self.par.M_core)
         valence_occupation = rho_j / self.par.m_j  # relative to the states at that energy
-        return - (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse)
+        res_inter =  (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse)
 
+        # Non-resonant
+        valence_change_to_GS = rho_j / self.par.R_VB_0  # relative to the number valence states in the ground state
+        nonres_inter = np.outer(valence_change_to_GS, N_Ej) / self.par.lambda_nonres  # returns j,i
+
+        return -res_inter - np.sum(nonres_inter,0)
     ############################
     ### Rates - time derivatives
     ############################
