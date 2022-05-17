@@ -16,7 +16,7 @@ valence_GS_occupation = 10
 DoS_shapefile = './DoSdata.npy'
 #work_function = -5.15 # eV
 DoS_band_origin = -10 #eV
-DoS_band_dd_end = 5.15
+DoS_band_dd_end = 3.15
 
 ## Rates and cross sections
 

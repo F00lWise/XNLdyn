@@ -72,6 +72,12 @@ class XNLpars:
         self.tdur_sig_i = np.array(tdur_sig)
         self.E_i_abs = np.array(E_i)
         self.E_i = np.empty(N_photens)  # defined below
+        
+        
+        self.solution_buffersize = 10
+        self.last_T_solutions  = np.zeros((1+self.Nsteps_z,self.solution_buffersize))
+        self.last_Ef_solutions = np.zeros((1+self.Nsteps_z,self.solution_buffersize))
+                                          
 
         assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_i) == len(lambda_res_Ei)), \
             'Make sure all photon pulses get all parameters!'
@@ -318,7 +324,7 @@ class FermiSolver:
     def inner_energy(self, occupation):
         return np.sum(self.enax * occupation)  # np.trapz(self.enax * occupation, self.enax)
 
-    def optimizable(self, pars, U_target, R_target):
+    def optimizable(self, pars, U_target, R_target, last_T=None, last_Ef=None):
         """
         This is a loss function to minimize to find a combination of Fermi energy and temperature for
         a given inner energy and valence band occupation.
@@ -331,13 +337,18 @@ class FermiSolver:
         R = np.sum(occ)
         ur = np.abs(U - U_target)
         rr = np.abs(R - R_target)
-        # print(f'Resiuals rU:{ur}, rR{rr}')
-        return ur, rr
 
-    def solve(self, U, R):
+        # The following gives a possibility to favor solutions that are similar to the last good solution.
+        inertia_factor = 1
+        if last_T is not None:
+            inertia_factor+=0.1*np.abs((T-last_T))/(T+last_T)
+            inertia_factor+=0.1*np.abs((Ef-last_Ef))/(Ef+last_Ef)
+        return ur*inertia_factor, rr*inertia_factor
+
+    def solve(self, U, R, last_T=None, last_Ef=None):
         global RTOL
         # print(f'Looking for a solution for U: {U}, R:{R}')
-        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R), method='nelder')  # powell
+        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R, last_T, last_Ef), method='nelder')  # powell
         ## Check for large residuals
         res_U, res_R = res.residual
         if res_U > 0.1:
@@ -395,11 +406,11 @@ class FermiSolver:
         self.Umax = np.max(self.Upoints)
         print('Loaded lookup table successfully.')
 
-    def lookup_TEf_from_UR(self, U_is, R_is):
-        if not (self.Umin - 0.1 < U_is < self.Umax):
-            raise ValueError(f'U: {U_is} out of bounds of lookup table')
+    def lookup_TEf_from_UR(self, U_is, R_is, last_T=None, last_Ef=None):
+        if not (self.Umin < U_is < self.Umax):
+            warnings.warn(f'U: {U_is} out of bounds of lookup table! (R: {R_is})')
         if not (self.Rmin < R_is < self.Rmax):
-            raise ValueError(f'R: {R_is} out of bounds of lookup table')
+            warnings.warn(f'R: {R_is} out of bounds of lookup table! (U: {U_is})')
 
         if self.DEBUG: print(U_is, R_is)
 
@@ -410,13 +421,21 @@ class FermiSolver:
 
         if np.isnan(T) or np.isnan(Ef):
             print(f'Lookup failed. Trying direct solve for R={R_is:.1f} and U={U_is:.1f}')
-            T, Ef = self.solve(U_is, R_is)  # try direct solving
+            T, Ef = self.solve(U_is, R_is, last_T=last_T, last_Ef=last_Ef)  # try direct solving
+            
+            if np.isnan(T):
+                print('Direct solve failed too - resetting initial guess to GS and trying again.')
+                self.par0['T'].value = 300
+                self.par0['Ef'].value = 0
+                T2, Ef2 = self.solve(U, R, last_T=last_T, last_Ef=last_Ef)
+                
+            if np.isnan(T) or np.isnan(Ef):
+                raise ValueError(f'Could not find a combination of Ef and T for R={R_is:.1f} and U={U_is:.1f}')
+                
             self.Upoints = np.append(self.Upoints, U_is)
             self.Rpoints = np.append(self.Rpoints, R_is)
             self.precalc_temperatures_points = np.append(self.precalc_temperatures_points, T)
             self.precalc_fermi_energies_points = np.append(self.precalc_fermi_energies_points, Ef)
-            if np.isnan(T) or np.isnan(Ef):
-                raise ValueError(f'Could not find a combination of Ef and T for R={R_is:.1f} and U={U_is:.1f}')
             print(f'Direct solve worked and lead to: T={T:.1f} and Ef={Ef:.1f}')
         return T, Ef
 
@@ -486,7 +505,7 @@ class FermiSolver:
         plt.pause(0.1)
         plt.show(block=False)
 
-    def generate_lookup_tables(self, N=100, save=True):
+    def generate_lookup_tables(self, N=150, save=True):
 
         assert np.mod(N, 2) == 0
         temperatures = np.logspace(0, 6, N - 1) + 295
@@ -526,18 +545,13 @@ class FermiSolver:
         self.Umin = np.min(self.Ugrid)
         self.Umax = np.max(self.Ugrid)
 
-    def save_lookup_TEf_from_UR(self, U, R):
-        try:
-            T, Ef = self.lookup_TEf_from_UR(U, R)
-            self.par0['T'].value = T
-            self.par0['Ef'].value = Ef
-        except:
-            print('Lookup failed. Attempting direct solve with GS parameters.')
-            self.par0['T'].value = 300
-            self.par0['Ef'].value = 0
-        T, Ef = self.solve(U, R)
-        return T, Ef
-
+    def save_lookup_TEf_from_UR(self, U, R, last_T=None, last_Ef=None):
+        """
+        This doubles down on precision by first looking up in the tables and then refining the result with an optimization.
+        """
+        T, Ef = self.lookup_TEf_from_UR(U, R, last_T=last_T, last_Ef=last_Ef)
+        T2, Ef2 = self.solve(U, R, last_T=last_T, last_Ef=last_Ef)
+        return (T2, Ef2) if np.isfinite(T2) else (T, Ef)
 
 ## Main Simulation
 
@@ -831,31 +845,46 @@ class XNLsim:
     ### Main differential describing the time evolution of voxels
     ##########################################################
 
+        
     def time_derivative(self, t, state_vector_flat):
         if self.DEBUG: print('t: ', t)
+        bufferindex = np.mod(self.call_counter, self.par.solution_buffersize)  # For sultion buffering
+        last_solution_bufferindex = np.argsort(self.par.last_T_solutions[0,:])[-1] # Highest time of previous solutions
+        self.par.last_T_solutions[0, bufferindex] = t # set timestamp
+        self.par.last_Ef_solutions[0, bufferindex] = t
         global RTOL
         # Reshape the state vector into sensible dimension
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
 
         # Determine thermalized distributions
         for iz, z in enumerate(self.par.zaxis[:]):
+            # Read last solution
+            last_T = self.par.last_T_solutions[iz+1,last_solution_bufferindex]
+            last_Ef = self.par.last_Ef_solutions[iz+1,last_solution_bufferindex]
+
             current_rho_j = self.state_vector[iz, 3:]
             if np.any(current_rho_j < -RTOL):
                 warnings.warn('Negative state density!')
             R = np.sum(current_rho_j)
             U = np.sum(current_rho_j * self.par.E_j)  # np.trapz(current_rho_j*self.par.E_j, x = self.par.E_j)
-            if iz < 2:
+            if iz < 1:
                 # When jumping to the surfacem do the safer lookup.
-                T, E_f = self.par.FermiSolver.save_lookup_TEf_from_UR(U, R)
-                if self.DEBUG and (iz == 0):
-                    print(U, R, '->', T, E_f)
+                T, E_f = self.par.FermiSolver.save_lookup_TEf_from_UR(U, R, last_T, last_Ef)
             else:
                 # From then on use the last results as inputs for the solver.
-                T, E_f = self.par.FermiSolver.solve(U, R)
+                T, E_f = self.par.FermiSolver.solve(U, R, last_T, last_Ef)
+                if np.isnan(T):
+                    T, E_f = self.par.FermiSolver.lookup_TEf_from_UR(U, R, last_T, last_Ef)
+                    
+            if self.DEBUG and (iz == 0):
+                    print(U, R, '->', T, E_f)
             if np.isnan(T):
                 print('!!')
                 warnings.warn('Critical: Could not determine Temperature and Fermi Energy!')
-
+                
+            # Buffer solution
+            self.par.last_T_solutions[iz+1, bufferindex] = T
+            self.par.last_Ef_solutions[iz+1, bufferindex] = E_f
             self.target_distributions[iz, :] = self.par.FermiSolver.fermi(T, E_f) * self.par.m_j
 
         # Calculate photon transmission as save it
@@ -954,12 +983,17 @@ class XNLsim:
         ### Also reconstruct the temperatures and Fermi energies
         sol.temperatures = np.zeros((len(sol.t), self.par.Nsteps_z))
         sol.fermi_energies = np.zeros((len(sol.t), self.par.Nsteps_z))
+        
+        self.par.FermiSolver.par0['T'].value = 300
+        self.par.FermiSolver.par0['Ef'].value = 0
 
         for it, t in enumerate(sol.t):
             for iz in range(self.par.Nsteps_z):
                 U = np.sum(sol.rho_j[iz, :, it] * self.par.E_j)
                 R = sol.R_VB[iz, it]
-                T, Ef = self.par.FermiSolver.save_lookup_TEf_from_UR(U, R)
+                T, Ef = self.par.FermiSolver.solve(U, R)
+                if np.isnan(T):
+                    T, Ef = self.par.FermiSolver.save_lookup_TEf_from_UR(U, R)
                 # if self.DEBUG and (iz==0):
                 #    print(U,R,'->',T, Ef)
                 sol.temperatures[it, iz], sol.fermi_energies[it, iz] = (T, Ef)
