@@ -1,7 +1,7 @@
-Nsteps_z = 10     # Steps in Z
+Nsteps_z = 15     # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
-timestep_min = 1 #fs
+timestep_min = 0.5 #fs
 ## Sample data
 Z = 10 #Sample thickness in nm
 atomic_density = 91.4  # atoms per nm³
@@ -38,5 +38,5 @@ Energy_axis_min = -10
 ## Incident photon profile
 I0       = [3,]   # Pulse energy density in photons per nm²
 t0       = [0,]   # Arrival time on time-axis / fs
-tdur_sig = [2,]  # Rms pulse duration / fs
+tdur_sig = [4,]  # Rms pulse duration / fs
 E_i      = [858,] # Photon Energies of incident pulses / eV
