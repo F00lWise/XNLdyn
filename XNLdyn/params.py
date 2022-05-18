@@ -1,7 +1,7 @@
-Nsteps_z = 15     # Steps in Z
+Nsteps_z = 5     # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
-timestep_min = 0.5 #fs
+timestep_min = 1.3 #fs
 ## Sample data
 Z = 10 #Sample thickness in nm
 atomic_density = 91.4  # atoms per nm³
@@ -10,7 +10,6 @@ temperature = 300      # Kelvin
 
 # Electronic state numbers per atom
 core_states = 2
-#total_valence_states = 12
 valence_GS_occupation = 10
 
 DoS_shapefile = './DoSdata.npy'
@@ -20,15 +19,22 @@ DoS_band_dd_end = 3.15
 
 ## Rates and cross sections
 
-tau_CH = 10            # Core hole lifetime / fs
-tau_th = 3             # Redistribution time of electrons in the VB / fs
-tau_free = 10          # Free electron lifetime
+tau_CH = 100            # Core hole lifetime / fs
+tau_th = 13             # Redistribution time of electrons in the VB / fs
+tau_free = 100          # Free electron lifetime
 lambda_res_Ei = (10,)  # Absorptions length of resonant photon energies / nm
 lambda_nonres = 190    # Absorption length of non-resonant photons, assumed equal for all / nm
 
 
 ## Fermi Energy
 E_f = 850.7 #eV
+
+# Size of the lookup tables for connecting inner energy and population to chemical potential and temperature
+lookup_table_data =  {'size': 200,
+                     'chem_pot_minstep': 0.005,
+                     'chem_pot_min': -80,
+                     'chem_pot_max': 25,
+                     'T_max': 1e8} 
 
 N_j = 50          # Number of points E_j with which the valence system is resolved
 Energy_axis_max = 80

@@ -38,6 +38,8 @@ class XNLpars:
         self.N_photens = N_photens  # Number of distict resonant photon energies
 
         self.N_j = N_j
+        
+        self.lookup_table_data = lookup_table_data
 
         self.timestep_min = timestep_min
 
@@ -299,8 +301,8 @@ class FermiSolver:
 
     def __init__(self, par, DEBUG=False):
         self.par0 = lmfit.Parameters()
-        self.par0.add('T', value=300, min=par.T_0-30, max=1e6)
-        self.par0.add('mu_chem', value=0, min=-50, max=50)
+        self.par0.add('T', value=300, min=par.T_0-30, max=1e9)
+        self.par0.add('mu_chem', value=0, min=-150, max=150)
         self.par = par
         self.enax = par.E_j
         self.m_j = par.m_j
@@ -339,8 +341,8 @@ class FermiSolver:
         # The following gives a possibility to favor solutions that are similar to the last good solution.
         inertia_factor = 1
         if last_T is not None:
-             inertia_factor+= 1e-6* np.abs((T-last_T))/(T+last_T)
-             inertia_factor+= 1e-6 * np.abs((mu_chem - last_Ef)) / (np.max((mu_chem + last_Ef, 1)))
+             inertia_factor+= 1e-0 * np.abs((T-last_T))/(T+last_T)
+             inertia_factor+= 1e-0 * np.abs((mu_chem - last_Ef)) / (np.max((mu_chem + last_Ef, 1)))
         return ur*inertia_factor, rr*inertia_factor
 
     def solve(self, U, R, last_T=None, last_Ef=None):
@@ -405,10 +407,10 @@ class FermiSolver:
         print('Loaded lookup table successfully.')
 
     def lookup_Tmu_from_UR(self, U_is, R_is, last_T=None, last_mu=None):
-        if not (self.Umin < U_is < self.Umax):
-            warnings.warn(f'U: {U_is} out of bounds of lookup table! (R: {R_is})')
+        if not (self.Umin-2 < U_is < self.Umax+2):
+            raise ValueError(f'U: {U_is} out of bounds of lookup table! (R: {R_is})')
         if not (self.Rmin < R_is < self.Rmax):
-            warnings.warn(f'R: {R_is} out of bounds of lookup table! (U: {U_is})')
+            raise ValueError(f'R: {R_is} out of bounds of lookup table! (U: {U_is})')
 
         if self.DEBUG: print(U_is, R_is)
 
@@ -490,7 +492,7 @@ class FermiSolver:
         ax1.set_title('Inner Energy')
         ax1.set_xlabel('Temperature')
         ax1.set_ylabel('Fermi Energy')
-
+        ax1.set_xscale('log')
         ax2 = fig.add_subplot(1, 2, 2)
 
         pl2 = ax2.pcolormesh(temperatures_gr, fermi_energies_gr, self.Rgrid, cmap=plt.cm.seismic,
@@ -499,16 +501,21 @@ class FermiSolver:
         ax2.set_title('Population')
         ax2.set_xlabel('Temperature')
         ax2.set_ylabel('Fermi Energy')
+        ax2.set_xscale('log')
+
         plt.tight_layout()
         plt.pause(0.1)
         plt.show(block=False)
 
-    def generate_lookup_tables(self, N=150, save=True):
-
+    def generate_lookup_tables(self, save):
+        tb = self.par.lookup_table_data
+        N = tb['size']
+        
         assert np.mod(N, 2) == 0
-        temperatures = np.logspace(0, 6, N - 1) + 295
-        fermis = np.logspace(-3, 1.5, int(N / 2))
-        fermis = np.concatenate((-fermis[::-1], fermis[1:]))
+        temperatures = np.logspace(0, tb['T_max'], N - 1) + 295
+        fermis_upper = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_max']), int(N / 2))
+        fermis_lower = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_min']), int(N / 2))
+        fermis = np.concatenate((-fermis_lower[::-1], fermis[1:]))
         print(
             f'Starting to generate lookup tables for T between {np.min(temperatures):.1f} to {np.max(temperatures):.1f} and mu_chem between {np.min(fermis):.1f} and {np.max(fermis):.1f}')
 
@@ -554,11 +561,12 @@ class FermiSolver:
 ## Main Simulation
 
 class XNLsim:
-    def __init__(self, par, DEBUG=False, load_tables=True):
+    def __init__(self, par, DEBUG=False, load_tables=True, save_tables = False):
         self.DEBUG = DEBUG
         self.intermediate_plots = False
         self.par = par
         self.par.make_derived_params()
+        
 
         if load_tables:
             try:
@@ -567,14 +575,14 @@ class XNLsim:
                 while True:
                     YN = input('Could not load table. Generate new ones ? (Y/N)')
                     if YN in ['y', 'Y']:
-                        self.par.FermiSolver.generate_lookup_tables()
+                        self.par.FermiSolver.generate_lookup_tables(save_tables)
                         break
                     elif YN in ['n', 'N']:
                         break
                     else:
                         print('Invalid answer.')
         else:
-            self.par.FermiSolver.generate_lookup_tables()
+            self.par.FermiSolver.generate_lookup_tables(save_tables)
 
         # initiate storing intermediate results
         self.call_counter = 0
@@ -1022,16 +1030,17 @@ class XNLsim:
 
         plt.sca(axes[1, 0])
         plt.title('Energies Averaged over z')
-        plt.plot(sol.t, np.mean(sol.temperatures, 1), 'C0', label='Temperature')
-        plt.plot(sol.t, sol.temperatures[:, 0], 'C1', label='Temperature @ Surface')
-        plt.ylabel('T (K)')
+        plt.plot(sol.t, sol.temperatures[:, 0]*PAR.kB, 'C0', label='Temperature')
+        plt.plot(sol.t, sol.temperatures[:,1:]*PAR.kB, 'C0', lw = 0.5)
+
+        plt.ylabel('T (eV)',color='C0')
         plt.legend(loc='upper left')
 
         axcp = axes[1, 0].twinx()
-        plt.plot(sol.t, np.mean(sol.fermi_energies, 1), 'C2', label='Fermi level shift')
-        plt.plot(sol.t, sol.E_free[0], 'C3', label='Fermi level shift @surface')
+        plt.plot(sol.t, sol.fermi_energies[:,0], 'C1', label='Fermi level shift')
+        plt.plot(sol.t, sol.fermi_energies[:,1:], 'C1', lw=0.5)
         plt.xlabel('t (fs)')
-        plt.ylabel('E (eV)')
+        plt.ylabel('E (eV)',color='C1')
 
         plt.legend(loc='lower left')
 

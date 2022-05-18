@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import XNLdyn
 
-def run_modified_simulation(PAR, sim_options, changed_parameters, new_values, debug=False):
+def run_modified_simulation(PAR, sim_options, changed_parameters, new_values, debug=False, save_tables = False):
     print(f'Initializing a simulation where {changed_parameters} are changed to {new_values}\n')
     # Change parameters in PAR
     assert len(changed_parameters)==len(new_values)
@@ -10,7 +10,7 @@ def run_modified_simulation(PAR, sim_options, changed_parameters, new_values, de
         setattr(PAR, par, new_values[i])
 
     # Update the simulation and calculate derived parameters
-    sim = XNLdyn.XNLsim(PAR, load_tables=False)
+    sim = XNLdyn.XNLsim(PAR, load_tables=False, save_tables=save_tables)
     sim.DEBUG = debug
     # run it!
     incident, transmitted = sim.run(**sim_options)
