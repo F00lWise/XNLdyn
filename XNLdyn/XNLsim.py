@@ -511,7 +511,6 @@ class FermiSolver:
     def generate_lookup_tables(self, save):
         tb = self.par.lookup_table_data
         N = tb['size']
-        print(N)
         assert np.mod(N, 2) == 0
         temperatures = np.logspace(0, np.log10(tb['T_max']), N - 1) + 295
         fermis_upper = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_max']), int(N / 2))
