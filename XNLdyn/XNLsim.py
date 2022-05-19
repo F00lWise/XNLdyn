@@ -138,8 +138,8 @@ class XNLpars:
         ## mj are normalized by the ground state population
         self.enax_dE_j = self.enax_j_edges[1:] - self.enax_j_edges[:-1]
         self.m_j = DoS_raw * self.enax_dE_j  # scale with energy step size
-        occupied = (np.sum(self.m_j[self.E_j < 0]) + 0.5 * self.m_j[self.E_j == 0]) / np.sum(
-            self.m_j)  # part that is occupied in GS
+        mj_up_to_incl_0 = self.m_j[self.E_j<0]#np.concatenate((self.m_j[self.E_j<0],[np.interp(0, self.E_j,self.m_j)]))
+        occupied = np.sum(mj_up_to_incl_0) / np.sum(self.m_j)  # part that is occupied in GS
         self.m_j = self.m_j / np.sum(self.m_j)  # normalize to one to be sure
         self.m_j *= valence_GS_occupation / occupied  # scale to ground state occupation
         # FEG solution starts where DFT DoS stops
@@ -167,7 +167,7 @@ class XNLpars:
         # This is a constant matrix needed in rate_free()
         self.energy_differences = np.zeros((self.Nsteps_z, self.N_j, self.N_photens))
         for i in range(self.N_photens):
-            self.energy_differences[:, :, i] = (self.E_j - self.E_i[i]) + self.E_f
+            self.energy_differences[:, :, i] = self.E_j + (self.E_i[i] + self.E_f)
 
     # def get_resonant_states(self, emin, emax, npoints=10):
     #     """
@@ -187,7 +187,7 @@ class XNLpars:
         A call costs 9.7 µs on jupyterhub for two Energies at one time - perhaps this can be
         reduced by using interpolation between a vector in the workspace.
         """
-        result = self.I0.copy() / self.atomic_density  # normalize from photons/nm² to (photons nm)/ atom
+        result = self.I0.copy()# / self.atomic_density  # normalize from photons/nm² to (photons nm)/ atom
         result[~self.resonant] = 0
         result[self.resonant] *= np.exp(-0.5 * ((t - self.t0[self.resonant]) / self.tdur_sig[self.resonant]) ** 2) \
                                  * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig[self.resonant])
@@ -255,7 +255,7 @@ class XNLpars:
             return np.sort(np.append(points, points_to_add))
 
         # The energies E_i and 0 must be in the axis
-        enax_j_fine = set_initial_points(list(self.E_i[self.E_i <= finemax]), min=min, max=finemax, skip=[0])
+        enax_j_fine = set_initial_points(list(self.E_i[self.E_i <= finemax]), min=min, max=finemax)#, skip=[0]
         # TODO: Can I avoid the necessity to include 0 so i can simulate resonances close to 0?
 
         # Fill up the gaps
@@ -647,8 +647,9 @@ class XNLsim:
     def proc_res_inter_Ej(self, N_Ej, R_core, rho_j):
         core_occupation = np.outer((R_core / self.par.M_core), np.ones(self.par.N_j))
         valence_occupation = rho_j / self.par.m_j  # relative to the states at that energy
-        gs_intensity = np.zeros(valence_occupation.shape)
-        gs_intensity[:, self.par.resonant] = N_Ej[:, self.par.resonant] / self.par.lambda_res_Ei
+        #gs_intensity = np.zeros(valence_occupation.shape)
+        #gs_intensity[:, self.par.resonant] = N_Ej[:, self.par.resonant] / (self.par.lambda_res_Ei * self.par.atomic_density)
+        gs_intensity = N_Ej * self.par.lambda_res_Ej_inverse / self.par.atomic_density
         if self.DEBUG:
             check_bounds(core_occupation, message='Valence occupation in proc_res_inter_Ej()')
             check_bounds(valence_occupation, message='Valence occupation in proc_res_inter_Ej()')
@@ -662,7 +663,7 @@ class XNLsim:
         result = np.empty((self.par.Nsteps_z, self.par.N_j, self.par.N_photens))
         for iz in range(self.par.Nsteps_z):
             result[iz] = np.outer(valence_change_to_GS[iz], N_Ej[iz, self.par.resonant])
-        return result / self.par.lambda_nonres  # returns z, j,i
+        return result / (self.par.lambda_nonres* self.par.atomic_density)  # returns z, j,i
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
@@ -743,11 +744,11 @@ class XNLsim:
         # Resonant
         core_occupation = (R_core / self.par.M_core)
         valence_occupation = rho_j / self.par.m_j  # relative to the states at that energy
-        res_inter =  (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse)
+        res_inter =  (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse/ self.par.atomic_density)
 
         # Non-resonant
         valence_change_to_GS = rho_j / self.par.R_VB_0  # relative to the number valence states in the ground state
-        nonres_inter = np.outer(valence_change_to_GS, N_Ej) / self.par.lambda_nonres  # returns j,i
+        nonres_inter = np.outer(valence_change_to_GS, N_Ej) / (self.par.lambda_nonres * self.par.atomic_density)  # returns j,i
 
         return -res_inter - np.sum(nonres_inter,0)
     ############################
@@ -767,7 +768,7 @@ class XNLsim:
             holes_j[holes_j < 0] = 0
         holes = self.par.M_VB - np.sum(rho_j, 1)  # the sum over j of holes_j/holes has to be 1
         if np.any(holes < 1e-10):
-            # TODO: Check why this triggers often in the very first time step
+            # TODO: Check why this triggers often in the very first time step - no longer seems to! (?)
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
             holes_j[holes_j < 1e-10] *= 0
 
@@ -788,12 +789,16 @@ class XNLsim:
 
         if self.DEBUG:
             check_z_index = 2
-            print('Deviation from electron conservation: ', np.sum(scattering_contribution, 1)[check_z_index])
+            elc_error = np.sum(scattering_contribution, 1)[check_z_index]
+            if elc_error>RTOL:
+                print('Deviation from electron conservation: ', elc_error)
             should_be_new_energy = mu_electrons[check_z_index]*R_VB + energy_incoming[check_z_index]
             is_new_energy = np.sum((rho_j[check_z_index] + scattering_contribution) * self.par.E_j, 1)[check_z_index]
             with np.errstate(invalid='ignore'):
-                print('Deviation from energy conservation (%): ',
-                      100 * np.abs(is_new_energy - should_be_new_energy)[check_z_index] / energy_incoming[check_z_index])
+                ec_error = np.abs(is_new_energy - should_be_new_energy)[check_z_index] / energy_incoming[check_z_index]
+                if ec_error>RTOL:
+                    print('Deviation from energy conservation (%): ',
+                          100 * ec_error)
 
         return without_scattering + scattering_contribution
 
@@ -811,9 +816,10 @@ class XNLsim:
 
         result = np.zeros(self.par.Nsteps_z)
         interesting = R_free > 0
-        result[interesting] = np.sum(nonres_inter[interesting] * self.par.energy_differences[interesting], axis = (1,2))\
-               + np.sum(ch_decay * self.par.E_j, axis = 1)[interesting]\
-               - el_scatt[interesting]*E_free[interesting]/R_free[interesting]
+        total_nonres = np.sum(nonres_inter[interesting] * self.par.energy_differences[interesting], axis = (1,2))
+        result[interesting] = total_nonres\
+               + np.sum(ch_decay * (self.par.E_j+self.par.E_f), axis = 1)[interesting]\
+               - el_scatt[interesting] * E_free[interesting]/R_free[interesting]
         return result
 
     ###################
@@ -822,7 +828,7 @@ class XNLsim:
 
     def z_dependence(self, t, state_vector):
         def zstep_euler(self, N, state_vector, iz):
-            return N + self.rate_N_dz_j_direct(N, state_vector[iz, :]) * self.par.zstepsize
+            return N + self.rate_N_dz_j_direct(N, state_vector[iz, :]) * self.par.zstepsize * self.par.atomic_density
 
         def double_zstep_RK(self, N, state_vector, iz):
             """
@@ -832,14 +838,14 @@ class XNLsim:
             k2 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k1, state_vector[iz + 1, :])
             k3 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k2, state_vector[iz + 1, :])
             k4 = self.rate_N_dz_j_direct(N + self.par.zstepsize * 2 * k3, state_vector[iz + 2, :])
-            return N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4)
+            return N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4) *self.par.atomic_density
 
         # get current photon irradiation:
         N_Ej_z = np.zeros((self.par.Nsteps_z+1, self.par.N_j))
 
         N_Ej_z[0, :] = self.par.pulse_profiles(t)  # momentary photon densities at time t for each photon energy
 
-        if self.DEBUG: print('Photons impinging per atom this timestep: ', N_Ej_z[0, self.par.resonant])
+        if self.DEBUG: print('Photons impinging per atom this timestep: ', N_Ej_z[0, self.par.resonant], 'i.e. ', N_Ej_z[0, self.par.resonant]/self.par.atomic_density ,'/atom')
 
         # Z-loop for every photon energy
         N_Ej_z[1, :] = zstep_euler(self, N_Ej_z[0, :], state_vector, 0)  # First step with euler
@@ -993,11 +999,12 @@ class XNLsim:
 
         ### Also reconstruct the temperatures and Fermi energies
         sol.temperatures = np.zeros((len(sol.t), self.par.Nsteps_z))
-        sol.fermi_energies = np.zeros((len(sol.t), self.par.Nsteps_z))
+        sol.chemical_potentials = np.zeros((len(sol.t), self.par.Nsteps_z))
         
         self.par.FermiSolver.par0['T'].value = 300
         self.par.FermiSolver.par0['mu_chem'].value = 0
 
+        inner_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
         for it, t in enumerate(sol.t):
             for iz in range(self.par.Nsteps_z):
                 U = np.sum(sol.rho_j[iz, :, it] * self.par.E_j)
@@ -1007,9 +1014,10 @@ class XNLsim:
                     T, mu_chem = self.par.FermiSolver.save_lookup_Tmu_from_UR(U, R)
                 # if self.DEBUG and (iz==0):
                 #    print(U,R,'->',T, mu_chem)
-                sol.temperatures[it, iz], sol.fermi_energies[it, iz] = (T, mu_chem)
+                sol.temperatures[it, iz], sol.chemical_potentials[it, iz] = (T, mu_chem)
+                inner_energies[it,iz] = U # This is needed later to check the energy conservation
 
-        fig, axes = plt.subplots(3, 2, figsize=(8, 8))
+        fig, axes = plt.subplots(4, 2, figsize=(10, 8))
         plt.sca(axes[0, 0])
         plt.title('State occupation changes')
         plt.pcolormesh(sol.t, PAR.E_j + PAR.mu_chem,
@@ -1039,8 +1047,8 @@ class XNLsim:
         plt.legend(loc='upper left')
 
         axcp = axes[1, 0].twinx()
-        plt.plot(sol.t, sol.fermi_energies[:,0], 'C1', label='Fermi level shift')
-        plt.plot(sol.t, sol.fermi_energies[:,1:], 'C1', lw=0.5)
+        plt.plot(sol.t, sol.chemical_potentials[:, 0], 'C1', label='Fermi level shift')
+        plt.plot(sol.t, sol.chemical_potentials[:, 1:], 'C1', lw=0.5)
         plt.xlabel('t (fs)')
         plt.ylabel('E (eV)',color='C1')
 
@@ -1086,11 +1094,53 @@ class XNLsim:
         plt.xlabel('time (fs)')
         plt.ylabel('Photons per atom')
 
-        # plt.title('Total number of electrons (<z>)')
-        # plt.plot(sol.t,np.mean(sol.core + sol.R_free +sol.R_VB,0))
-        # plt.ylabel('Electrons')
-        # plt.xlabel('time (fs)')
-        # plt.ylim(0,None)
+
+        plt.sca(axes[3, 0])
+        plt.title('Electron Conservation (<z>)')
+        plt.plot(sol.t,np.mean(sol.core + sol.R_free +sol.R_VB,0))
+        plt.ylabel('No of Electrons')
+        plt.xlabel('time (fs)')
+        plt.ylim(None,None)
+
+
+        ## Integrat energy for each timestepsol.chemical_potentials+
+        absorbed_energy_dt = np.sum((sol.photon_densities[0]-sol.photon_densities[-1])*(self.par.E_i+self.par.E_f),0)
+        absorbed_energy = np.array([np.trapz(absorbed_energy_dt[:i],sol.t[:i]) for i in range(len(absorbed_energy_dt))])
+        factor = self.par.atomic_density * self.par.zstepsize # From energy per atom to energy per nm²
+        total_free = np.sum(sol.E_free[:,:],0) * factor
+        #total_free_simple = np.sum(sol.R_free[:,:]*(self.par.E_f),0) * factor
+        total_inner = np.sum(inner_energies[:,:],1) * factor
+        total_inner = total_inner - total_inner[0]
+        total_core = np.sum((self.par.M_core- sol.core[:,:])*self.par.E_f,0) * factor
+        total_energies = total_free + total_inner + total_core
+        #total_energies_simple = total_free_simple + total_inner + total_core
+
+        plt.sca(axes[3, 1])
+        #plt.figure()
+        plt.plot(sol.t, total_core, label = 'Core')
+        plt.plot(sol.t, total_inner, label = 'VB')
+        plt.plot(sol.t, total_free, label = 'Free')
+        #plt.plot(sol.t, total_free_simple, label = 'Free simple')
+        plt.plot(sol.t, total_energies, label = 'Total in system')
+        #plt.plot(sol.t, total_energies_simple, label = 'Total in system simple')
+        plt.plot(sol.t, absorbed_energy, label = 'Total absorbed')
+
+        #Calculated in a different way just because
+        incident_pulse_energies_total = np.trapz(sol_photon_densities[0, :, :]*(self.par.E_i+self.par.E_f).T, x=sol.t)
+        incident_pulse_energies_total_check = self.par.I0_i * (self.par.E_i + self.par.E_f).T * self.par.atomic_density
+        transmitted_pulse_energies_total = np.trapz(sol_photon_densities[-1, :, :]*(self.par.E_i+self.par.E_f).T, x=sol.t)
+        absorbed_energy_total = incident_pulse_energies_total-transmitted_pulse_energies_total
+
+        for i in range(self.par.N_photens):
+            #plt.axhline(incident_pulse_energies_total, ls='--', label = 'Total Irradiated')
+            plt.axhline(absorbed_energy_total, ls='--', label = 'Total absorbed')
+        plt.legend()
+
+        plt.xlabel('Time (fs)')
+        plt.ylabel('Energy (eV nm³ / atoms nm²)')
 
         plt.tight_layout()
         plt.show()
+        plt.pause(20)
+
+        print('Done')

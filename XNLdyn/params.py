@@ -25,16 +25,15 @@ tau_free = 100          # Free electron lifetime
 lambda_res_Ei = (10,)  # Absorptions length of resonant photon energies / nm
 lambda_nonres = 190    # Absorption length of non-resonant photons, assumed equal for all / nm
 
-
 ## Fermi Energy
 E_f = 850.7 #eV
 
 # Size of the lookup tables for connecting inner energy and population to chemical potential and temperature
 lookup_table_data =  {'size': 200,
                      'chem_pot_minstep': 0.005,
-                     'chem_pot_min': -80,
+                     'chem_pot_min': -160,
                      'chem_pot_max': 25,
-                     'T_max': 1e8} 
+                     'T_max': 150/8.617333262145e-5}
 
 N_j = 50          # Number of points E_j with which the valence system is resolved
 Energy_axis_max = 80
