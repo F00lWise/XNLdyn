@@ -78,11 +78,11 @@ class XNLpars:
         self.E_i = np.empty(N_photens)  # defined below
         
         
-        self.solution_buffersize = 10
-        self.last_T_solutions  = np.full((1+self.Nsteps_z,self.solution_buffersize), fill_value=300.)
-        self.last_Ef_solutions = np.full((1+self.Nsteps_z,self.solution_buffersize), fill_value=0.)
-        self.last_T_solutions[0,:] = -np.inf # Timestamps for initialized values
-        self.last_Ef_solutions[0,:] = -np.inf
+        #self.solution_buffersize = 10
+        #self.last_T_solutions  = np.full((1+self.Nsteps_z,self.solution_buffersize), fill_value=300.)
+        #self.last_Ef_solutions = np.full((1+self.Nsteps_z,self.solution_buffersize), fill_value=0.)
+        #self.last_T_solutions[0,:] = -np.inf # Timestamps for initialized values
+        #self.last_Ef_solutions[0,:] = -np.inf
         assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_i) == len(lambda_res_Ei)), \
             'Make sure all photon pulses get all parameters!'
 
@@ -339,12 +339,13 @@ class FermiSolver:
         rr = np.abs(R - R_target)
 
         # The following gives a possibility to favor solutions that are similar to the last good solution.
-        inertia_factor = 1
-        if last_T is not None:
-             inertia_factor+= 1e-0 * np.abs((T-last_T))/(T+last_T)
-             inertia_factor+= 1e-0 * np.abs((mu_chem - last_Ef)) / (np.max((mu_chem + last_Ef, 1)))
-        return ur*inertia_factor, rr*inertia_factor
-
+        #inertia_factor = 1
+        #if last_T is not None:
+        #     inertia_factor+= 1 * np.abs((T-last_T))/(T+last_T)
+        #     inertia_factor+= 1 * np.abs((mu_chem - last_Ef)) / (np.max((mu_chem + last_Ef, 1)))
+        #return ur*inertia_factor, rr*inertia_factor
+        return ur, rr
+    
     def solve(self, U, R, last_T=None, last_Ef=None):
         global RTOL
         # print(f'Looking for a solution for U: {U}, R:{R}')
@@ -375,7 +376,7 @@ class FermiSolver:
             return np.nan, np.nan
 
         else:
-            self.par0 = res.params  # pass solution for the next iteration
+            #self.par0 = res.params  # pass solution for the next iteration
             return res.params['T'].value, res.params['mu_chem'].value
 
     def solve_target_distribution(self, momentary_distribution):
@@ -510,12 +511,12 @@ class FermiSolver:
     def generate_lookup_tables(self, save):
         tb = self.par.lookup_table_data
         N = tb['size']
-        
+        print(N)
         assert np.mod(N, 2) == 0
-        temperatures = np.logspace(0, tb['T_max'], N - 1) + 295
+        temperatures = np.logspace(0, np.log10(tb['T_max']), N - 1) + 295
         fermis_upper = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_max']), int(N / 2))
-        fermis_lower = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_min']), int(N / 2))
-        fermis = np.concatenate((-fermis_lower[::-1], fermis[1:]))
+        fermis_lower = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(-tb['chem_pot_min']), int(N / 2))
+        fermis = np.concatenate((-fermis_lower[::-1], fermis_upper[1:]))
         print(
             f'Starting to generate lookup tables for T between {np.min(temperatures):.1f} to {np.max(temperatures):.1f} and mu_chem between {np.min(fermis):.1f} and {np.max(fermis):.1f}')
 
@@ -555,6 +556,8 @@ class FermiSolver:
         This doubles down on precision by first looking up in the tables and then refining the result with an optimization.
         """
         T, mu_chem = self.lookup_Tmu_from_UR(U, R, last_T=last_T, last_mu=last_mu)
+        self.par0['T'].value = T
+        self.par0['mu_chem'].value = mu_chem
         T2, Ef2 = self.solve(U, R, last_T=last_T, last_Ef=last_mu)
         return (T2, Ef2) if np.isfinite(T2) else (T, mu_chem)
 
@@ -854,13 +857,13 @@ class XNLsim:
         
     def time_derivative(self, t, state_vector_flat):
         if self.DEBUG: print('t: ', t)
-        bufferindex = np.mod(self.call_counter, self.par.solution_buffersize)  # For sultion buffering
-        last_solution_bufferindex = np.argsort(self.par.last_T_solutions[0,:])[-1] # Highest time of previous solutions
-        self.par.last_T_solutions[0, bufferindex] = t # set timestamp
-        self.par.last_Ef_solutions[0, bufferindex] = t
+        #bufferindex = np.mod(self.call_counter, self.par.solution_buffersize)  # For sultion buffering
+        #last_solution_bufferindex = np.argsort(self.par.last_T_solutions[0,:])[-1] # Highest time of previous solutions
+        #self.par.last_T_solutions[0, bufferindex] = t # set timestamp
+        #self.par.last_Ef_solutions[0, bufferindex] = t
 
-        T_buffer = self.par.last_T_solutions
-        Ef_buffer = self.par.last_Ef_solutions
+        #T_buffer = self.par.last_T_solutions
+        #Ef_buffer = self.par.last_Ef_solutions
         global RTOL
         # Reshape the state vector into sensible dimension
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
@@ -868,22 +871,22 @@ class XNLsim:
         # Determine thermalized distributions
         for iz, z in enumerate(self.par.zaxis[:]):
             # Read last solution
-            last_T = self.par.last_T_solutions[iz+1,last_solution_bufferindex]
-            last_Ef = self.par.last_Ef_solutions[iz+1,last_solution_bufferindex]
+            #last_T = self.par.last_T_solutions[iz+1,last_solution_bufferindex]
+            #last_Ef = self.par.last_Ef_solutions[iz+1,last_solution_bufferindex]
 
             current_rho_j = self.state_vector[iz, 3:]
             if np.any(current_rho_j < -RTOL):
                 warnings.warn('Negative state density!')
             R = np.sum(current_rho_j)
-            U = np.sum(current_rho_j * self.par.E_j)  # np.trapz(current_rho_j*self.par.E_j, x = self.par.E_j)
+            U = np.sum(current_rho_j * self.par.E_j)  
             if iz < 1:
                 # When jumping to the surfacem do the safer lookup.
-                T, mu_chem = self.par.FermiSolver.save_lookup_Tmu_from_UR(U, R, last_T, last_Ef)
+                T, mu_chem = self.par.FermiSolver.save_lookup_Tmu_from_UR(U, R)#, last_T, last_Ef
             else:
                 # From then on use the last results as inputs for the solver.
-                T, mu_chem = self.par.FermiSolver.solve(U, R, last_T, last_Ef)
+                T, mu_chem = self.par.FermiSolver.solve(U, R)#, last_T, last_Ef
                 if np.isnan(T):
-                    T, mu_chem = self.par.FermiSolver.lookup_Tmu_from_UR(U, R, last_T, last_Ef)
+                    T, mu_chem = self.par.FermiSolver.lookup_Tmu_from_UR(U, R)#, last_T, last_Ef
                     
             if self.DEBUG and (iz == 0):
                     print(U, R, '->', T, mu_chem)
@@ -892,8 +895,8 @@ class XNLsim:
                 warnings.warn('Critical: Could not determine Temperature and Fermi Energy!')
                 
             # Buffer solution
-            self.par.last_T_solutions[iz+1, bufferindex] = T
-            self.par.last_Ef_solutions[iz+1, bufferindex] = mu_chem
+            #self.par.last_T_solutions[iz+1, bufferindex] = T
+            #self.par.last_Ef_solutions[iz+1, bufferindex] = mu_chem
             self.target_distributions[iz, :] = self.par.FermiSolver.fermi(T, mu_chem) * self.par.m_j
 
         # Calculate photon transmission as save it
