@@ -1104,7 +1104,7 @@ class XNLsim:
 
 
         ## Integrat energy for each timestepsol.chemical_potentials+
-        absorbed_energy_dt = np.sum((sol.photon_densities[0]-sol.photon_densities[-1])*(self.par.E_i+self.par.E_f),0)
+        absorbed_energy_dt = np.sum((sol.photon_densities[0]-sol.photon_densities[-1]).T*(self.par.E_i+self.par.E_f),1)
         absorbed_energy = np.array([np.trapz(absorbed_energy_dt[:i],sol.t[:i]) for i in range(len(absorbed_energy_dt))])
         factor = self.par.atomic_density * self.par.zstepsize # From energy per atom to energy per nm²
         total_free = np.sum(sol.E_free[:,:],0) * factor
@@ -1126,14 +1126,14 @@ class XNLsim:
         plt.plot(sol.t, absorbed_energy, label = 'Total absorbed')
 
         #Calculated in a different way just because
-        incident_pulse_energies_total = np.trapz(sol_photon_densities[0, :, :]*(self.par.E_i+self.par.E_f).T, x=sol.t)
-        incident_pulse_energies_total_check = self.par.I0_i * (self.par.E_i + self.par.E_f).T * self.par.atomic_density
-        transmitted_pulse_energies_total = np.trapz(sol_photon_densities[-1, :, :]*(self.par.E_i+self.par.E_f).T, x=sol.t)
+        incident_pulse_energies_total = np.trapz((sol_photon_densities[0, :, :].T * (self.par.E_i + self.par.E_f)).T,
+                                                 x=sol.t)
+        #incident_pulse_energies_total_check = self.par.I0_i * (self.par.E_i + self.par.E_f).T * self.par.atomic_density
+        transmitted_pulse_energies_total = np.trapz((sol_photon_densities[-1, :, :].T*(self.par.E_i+self.par.E_f)).T, x=sol.t)
         absorbed_energy_total = incident_pulse_energies_total-transmitted_pulse_energies_total
 
-        for i in range(self.par.N_photens):
-            #plt.axhline(incident_pulse_energies_total, ls='--', label = 'Total Irradiated')
-            plt.axhline(absorbed_energy_total, ls='--', label = 'Total absorbed')
+
+        plt.axhline(np.sum(absorbed_energy_total), ls='--', label = 'Total absorbed')
         plt.legend()
 
         plt.xlabel('Time (fs)')
