@@ -1097,10 +1097,12 @@ class XNLsim:
 
         plt.sca(axes[3, 0])
         plt.title('Electron Conservation (<z>)')
-        plt.plot(sol.t,np.mean(sol.core + sol.R_free +sol.R_VB,0))
+        electrons = np.mean(sol.core + sol.R_free +sol.R_VB,0)
+        plt.plot(sol.t,electrons, label=f'Loss: {100*(electrons[-1]-electrons[0])/electrons[0]:.2f}%')
         plt.ylabel('No of Electrons')
         plt.xlabel('time (fs)')
         plt.ylim(None,None)
+        plt.legend()
 
 
         ## Integrat energy for each timestepsol.chemical_potentials+
@@ -1125,15 +1127,15 @@ class XNLsim:
         #plt.plot(sol.t, total_energies_simple, label = 'Total in system simple')
         plt.plot(sol.t, absorbed_energy, label = 'Total absorbed')
 
-        #Calculated in a different way just because
-        incident_pulse_energies_total = np.trapz((sol_photon_densities[0, :, :].T * (self.par.E_i + self.par.E_f)).T,
-                                                 x=sol.t)
+        ##Calculated in a different way just because
+        #incident_pulse_energies_total = np.trapz((sol_photon_densities[0, :, :].T * (self.par.E_i + self.par.E_f)).T,
+        #                                         x=sol.t)
         #incident_pulse_energies_total_check = self.par.I0_i * (self.par.E_i + self.par.E_f).T * self.par.atomic_density
-        transmitted_pulse_energies_total = np.trapz((sol_photon_densities[-1, :, :].T*(self.par.E_i+self.par.E_f)).T, x=sol.t)
-        absorbed_energy_total = incident_pulse_energies_total-transmitted_pulse_energies_total
+        #transmitted_pulse_energies_total = np.trapz((sol_photon_densities[-1, :, :].T*(self.par.E_i+self.par.E_f)).T, x=sol.t)
+        #absorbed_energy_total = incident_pulse_energies_total-transmitted_pulse_energies_total
 
 
-        plt.axhline(np.sum(absorbed_energy_total), ls='--', label = 'Total absorbed')
+        plt.axhline(absorbed_energy[-1], ls='--', label=f'Energy Lost: {100*(absorbed_energy[-1]-total_energies[-1])/absorbed_energy[-1]:.2f}%')
         plt.legend()
 
         plt.xlabel('Time (fs)')
@@ -1141,6 +1143,6 @@ class XNLsim:
 
         plt.tight_layout()
         plt.show()
-        plt.pause(20)
+        #plt.pause(20)
 
         print('Done')

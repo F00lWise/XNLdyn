@@ -19,9 +19,9 @@ DoS_band_dd_end = 3.15
 
 ## Rates and cross sections
 
-tau_CH = 100            # Core hole lifetime / fs
-tau_th = 100             # Redistribution time of electrons in the VB / fs
-tau_free = 100          # Free electron lifetime
+tau_CH = 10           # Core hole lifetime / fs
+tau_th = 1            # Redistribution time of electrons in the VB / fs
+tau_free = 10          # Free electron lifetime
 lambda_res_Ei = (10,)  # Absorptions length of resonant photon energies / nm
 lambda_nonres = 190    # Absorption length of non-resonant photons, assumed equal for all / nm
 
@@ -31,13 +31,13 @@ E_f = 850.7 #eV
 # Size of the lookup tables for connecting inner energy and population to chemical potential and temperature
 lookup_table_data =  {'size': 200,
                      'chem_pot_minstep': 0.005,
-                     'chem_pot_min': -160,
+                     'chem_pot_min': -250,
                      'chem_pot_max': 25,
                      'T_max': 150/8.617333262145e-5}
 
-N_j = 50          # Number of points E_j with which the valence system is resolved
-Energy_axis_max = 80
-Energy_axis_fine_until = 10
+N_j = 100          # Number of points E_j with which the valence system is resolved
+Energy_axis_max = 100
+Energy_axis_fine_until = 30
 Energy_axis_min = -10
 
 ## Incident photon profile
