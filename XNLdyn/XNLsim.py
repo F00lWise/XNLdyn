@@ -408,10 +408,10 @@ class FermiSolver:
         print('Loaded lookup table successfully.')
 
     def lookup_Tmu_from_UR(self, U_is, R_is, last_T=None, last_mu=None):
-        if not (self.Umin-2 < U_is < self.Umax+2):
-            raise ValueError(f'U: {U_is} out of bounds of lookup table! (R: {R_is})')
+        if not (self.Umin-1 < U_is < self.Umax+2):
+            warnings.warn(f'U: {U_is} out of bounds of lookup table! (R: {R_is})')
         if not (self.Rmin < R_is < self.Rmax):
-            raise ValueError(f'R: {R_is} out of bounds of lookup table! (U: {U_is})')
+            warnings.warn(f'R: {R_is} out of bounds of lookup table! (U: {U_is})')
 
         if self.DEBUG: print(U_is, R_is)
 
@@ -782,10 +782,11 @@ class XNLsim:
         with np.errstate(invalid='ignore'):
             energy_incoming = el_scatt * E_free / R_free  # This much energy is coming in
             np.nan_to_num(energy_incoming, copy=False, nan=0)  # Catching results of 0/0
-            mu_electrons = np.sum(rho_j * self.par.E_j, 1) / R_VB  # This much energy per el is in the electron distribution
-            mu_holes = np.sum(holes_j * self.par.E_j, 1) / holes  # This much energy per hole fits into the remaining holes
-            electrons_to_move = energy_incoming / (-mu_electrons + mu_holes)
-        scattering_contribution = (-rho_j.T * electrons_to_move / R_VB + holes_j.T * electrons_to_move / holes).T
+            U_electrons = np.sum(rho_j * self.par.E_j, 1) / R_VB  # This much energy per el is in the electron distribution
+            U_holes = np.sum(holes_j * self.par.E_j, 1) / holes  # This much energy per hole fits into the remaining holes
+            electrons_to_move = energy_incoming / (-U_electrons + U_holes)
+        scattering_contribution = (-rho_j.T * electrons_to_move / R_VB + 
+                                  holes_j.T * electrons_to_move / holes).T
 
         if self.DEBUG:
             check_z_index = 2
@@ -1004,7 +1005,7 @@ class XNLsim:
         self.par.FermiSolver.par0['T'].value = 300
         self.par.FermiSolver.par0['mu_chem'].value = 0
 
-        inner_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
+        sol.inner_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
         for it, t in enumerate(sol.t):
             for iz in range(self.par.Nsteps_z):
                 U = np.sum(sol.rho_j[iz, :, it] * self.par.E_j)
@@ -1015,7 +1016,7 @@ class XNLsim:
                 # if self.DEBUG and (iz==0):
                 #    print(U,R,'->',T, mu_chem)
                 sol.temperatures[it, iz], sol.chemical_potentials[it, iz] = (T, mu_chem)
-                inner_energies[it,iz] = U # This is needed later to check the energy conservation
+                sol.inner_energies[it,iz] = U # This is needed later to check the energy conservation
 
         fig, axes = plt.subplots(4, 2, figsize=(10, 8))
         plt.sca(axes[0, 0])
@@ -1050,7 +1051,7 @@ class XNLsim:
         plt.plot(sol.t, sol.chemical_potentials[:, 0], 'C1', label='Fermi level shift')
         plt.plot(sol.t, sol.chemical_potentials[:, 1:], 'C1', lw=0.5)
         plt.xlabel('t (fs)')
-        plt.ylabel('E (eV)',color='C1')
+        plt.ylabel('mu (eV)',color='C1')
 
         plt.legend(loc='lower left')
 
@@ -1111,7 +1112,7 @@ class XNLsim:
         factor = self.par.atomic_density * self.par.zstepsize # From energy per atom to energy per nm²
         total_free = np.sum(sol.E_free[:,:],0) * factor
         #total_free_simple = np.sum(sol.R_free[:,:]*(self.par.E_f),0) * factor
-        total_inner = np.sum(inner_energies[:,:],1) * factor
+        total_inner = np.sum(sol.inner_energies[:,:],1) * factor
         total_inner = total_inner - total_inner[0]
         total_core = np.sum((self.par.M_core- sol.core[:,:])*self.par.E_f,0) * factor
         total_energies = total_free + total_inner + total_core
