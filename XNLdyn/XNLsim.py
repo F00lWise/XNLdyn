@@ -793,7 +793,7 @@ class XNLsim:
             elc_error = np.sum(scattering_contribution, 1)[check_z_index]
             if elc_error>RTOL:
                 print('Deviation from electron conservation: ', elc_error)
-            should_be_new_energy = mu_electrons[check_z_index]*R_VB + energy_incoming[check_z_index]
+            should_be_new_energy = U_electrons[check_z_index]*R_VB + energy_incoming[check_z_index]
             is_new_energy = np.sum((rho_j[check_z_index] + scattering_contribution) * self.par.E_j, 1)[check_z_index]
             with np.errstate(invalid='ignore'):
                 ec_error = np.abs(is_new_energy - should_be_new_energy)[check_z_index] / energy_incoming[check_z_index]
