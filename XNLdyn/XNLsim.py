@@ -1108,7 +1108,7 @@ class XNLsim:
 
         ## Integrat energy for each timestepsol.chemical_potentials+
         absorbed_energy_dt = np.sum((sol.photon_densities[0]-sol.photon_densities[-1]).T*(self.par.E_i+self.par.E_f),1)
-        absorbed_energy = np.array([np.trapz(absorbed_energy_dt[:i],sol.t[:i]) for i in range(len(absorbed_energy_dt))])
+        absorbed_energy = np.array([np.trapz(absorbed_energy_dt[:i+1],sol.t[:i+1]) for i in range(len(absorbed_energy_dt))])
         factor = self.par.atomic_density * self.par.zstepsize # From energy per atom to energy per nm²
         total_free = np.sum(sol.E_free[:,:],0) * factor
         #total_free_simple = np.sum(sol.R_free[:,:]*(self.par.E_f),0) * factor
