@@ -1,4 +1,4 @@
-Nsteps_z = 14     # Steps in Z
+Nsteps_z = 4     # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
 timestep_min = 1.3 #fs

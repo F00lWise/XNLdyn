@@ -294,274 +294,48 @@ class XNLpars:
         plt.legend()
         plt.pause(0.1)
 
-class FermiSolver:
-    """
-    This class finds the target "thermal equilibrium" electron distribution in the valence band for any given distribution or a set of inner energy and population
-    """
 
+class FermiSolver:
     def __init__(self, par, DEBUG=False):
-        self.par0 = lmfit.Parameters()
-        self.par0.add('T', value=300, min=par.T_0-30, max=1e9)
-        self.par0.add('mu_chem', value=0, min=-150, max=150)
-        self.par = par
-        self.enax = par.E_j
-        self.m_j = par.m_j
-        self.kB = 8.617333262145e-5
         self.DEBUG = DEBUG
+        self.par = par
+        self.par0 = 300, 10
 
     def fermi(self, T: float, mu_chem: float):
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
-        energy_ratios = (self.enax - mu_chem) / (T * self.kB)
+        energy_ratios = (self.par.E_j - mu_chem) / (T * self.par.kB)
         fermi_distr = np.zeros(energy_ratios.shape)
-        calculatable = np.abs(energy_ratios) < 15
+        calculatable = energy_ratios > -15
         fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
-        fermi_distr[energy_ratios < -15] = 1
-        fermi_distr[energy_ratios > 15] = 0
-        # if self.DEBUG:
-        #    check_bounds(fermi_distr, message='Fermi distribution in fermi()')
+        fermi_distr[~calculatable] = 1
         return fermi_distr
 
-    def inner_energy(self, occupation):
-        return np.sum(self.enax * occupation)  # np.trapz(self.enax * occupation, self.enax)
+    def occupation(self, T, mu_chem):
+        return self.fermi(T, mu_chem) * self.par.m_j
 
-    def optimizable(self, pars, U_target, R_target, last_T=None, last_Ef=None):
-        """
-        This is a loss function to minimize to find a combination of Fermi energy and temperature for
-        a given inner energy and valence band occupation.
-        """
-        vals = pars.valuesdict()
-        T = vals['T']
-        mu_chem = vals['mu_chem']
-        occ = self.m_j * self.fermi(T, mu_chem)
-        U = self.inner_energy(occ)
-        R = np.sum(occ)
-        ur = np.abs(U - U_target)
-        rr = np.abs(R - R_target)
+    def loss_fcn(self, X, U_target, R_target):
+        T, mu_chem = X
+        occ = self.occupation(T, mu_chem)
+        U_is = np.sum(self.par.E_j * occ)
+        R_is = np.sum(occ)
+        return U_is - U_target, R_is - R_target
 
-        # The following gives a possibility to favor solutions that are similar to the last good solution.
-        #inertia_factor = 1
-        #if last_T is not None:
-        #     inertia_factor+= 1 * np.abs((T-last_T))/(T+last_T)
-        #     inertia_factor+= 1 * np.abs((mu_chem - last_Ef)) / (np.max((mu_chem + last_Ef, 1)))
-        #return ur*inertia_factor, rr*inertia_factor
-        return ur, rr
-    
-    def solve(self, U, R, last_T=None, last_Ef=None):
-        global RTOL
-        # print(f'Looking for a solution for U: {U}, R:{R}')
-        res = lmfit.minimize(self.optimizable, self.par0, args=(U, R, last_T, last_Ef), method='nelder')  # powell
-        ## Check for large residuals
-        res_U, res_R = res.residual
-        if res_U > 0.1:
-            if self.DEBUG: print(f'Residual in U remained significant ({res_U}) Setting to NaN')
-            return np.nan, np.nan
-        if res_R > 0.1:
-            if self.DEBUG: print(f'Residual in R remained significant ({res_R}) Setting to NaN')
-            return np.nan, np.nan
-        ## Check for running into parameter limits
-        if res.params['T'].value < res.params['T'].min + RTOL:
-            if self.DEBUG: print('Minimum T reached!')
-            #return np.nan, np.nan
-        if res.params['T'].value > res.params['T'].max - RTOL:
-            if self.DEBUG: print('Maximum T reached!')
-            #return np.nan, np.nan
-        if res.params['mu_chem'].value < res.params['mu_chem'].min + RTOL:
-            if self.DEBUG: print('Minimum mu_chem reached!')
-            #return np.nan, np.nan
-        if res.params['mu_chem'].value > res.params['mu_chem'].max - RTOL:
-            if self.DEBUG: print('Maximum mu_chem reached!')
-            #return np.nan, np.nan
-        if not res.success:
-            # raise RuntimeError('No solution found!')
-            return np.nan, np.nan
-
-        else:
-            #self.par0 = res.params  # pass solution for the next iteration
-            return res.params['T'].value, res.params['mu_chem'].value
-
-    def lookup_Tmu_from_UR(self, U_is, R_is, last_T=None, last_mu=None):
-        if not (self.Umin-1 < U_is < self.Umax+2):
-            warnings.warn(f'U: {U_is} out of bounds of lookup table! (R: {R_is})')
-        if not (self.Rmin < R_is < self.Rmax):
-            warnings.warn(f'R: {R_is} out of bounds of lookup table! (U: {U_is})')
-
-        if self.DEBUG: print(U_is, R_is)
-
-        T = sc.interpolate.griddata((self.Upoints, self.Rpoints), self.precalc_temperatures_points, (U_is, R_is),
-                                    method='nearest')
-        mu_chem = sc.interpolate.griddata((self.Upoints, self.Rpoints), self.precalc_fermi_energies_points, (U_is, R_is),
-                                          method='nearest')
-
-        if np.isnan(T) or np.isnan(mu_chem):
-            print(f'Lookup failed. Trying direct solve for R={R_is:.1f} and U={U_is:.1f}')
-            T, mu_chem = self.solve(U_is, R_is, last_T=last_T, last_Ef=last_mu)  # try direct solving
-            
-            if np.isnan(T):
-                print('Direct solve failed too - resetting initial guess to GS and trying again.')
-                self.par0['T'].value = 300
-                self.par0['mu_chem'].value = 0
-                T, mu_chem = self.solve(U_is, R_is, last_T=last_T, last_Ef=last_mu)
-                
-            if np.isnan(T) or np.isnan(mu_chem):
-                raise ValueError(f'Could not find a combination of mu_chem and T for R={R_is:.1f} and U={U_is:.1f}')
-                
-            self.Upoints = np.append(self.Upoints, U_is)
-            self.Rpoints = np.append(self.Rpoints, R_is)
-            self.precalc_temperatures_points = np.append(self.precalc_temperatures_points, T)
-            self.precalc_fermi_energies_points = np.append(self.precalc_fermi_energies_points, mu_chem)
-            print(f'Direct solve worked and lead to: T={T:.1f} and mu_chem={mu_chem:.1f}')
+    def solve(self, U, R):
+        sol = sc.optimize.root(self.loss_fcn, self.par0, args=(U, R), method='hybr', tol=RTOL)
+        T, mu_chem = sol.x
+        if T < 0:
+            raise ValueError('Computed a negative temperature!')
         return T, mu_chem
-
-    def save_lookup_Tmu_from_UR(self, U, R, last_T=None, last_mu=None):
-        """
-        This doubles down on precision by first looking up in the tables and then refining the result with an optimization.
-        """
-        T, mu_chem = self.lookup_Tmu_from_UR(U, R, last_T=last_T, last_mu=last_mu)
-        self.par0['T'].value = T
-        self.par0['mu_chem'].value = mu_chem
-        T2, Ef2 = self.solve(U, R, last_T=last_T, last_Ef=last_mu)
-        return (T2, Ef2) if np.isfinite(T2) else (T, mu_chem)
-
-    def generate_lookup_tables(self, save):
-        tb = self.par.lookup_table_data
-        N = tb['size']
-        assert np.mod(N, 2) == 0
-        temperatures = np.logspace(0, np.log10(tb['T_max']), N - 1) + 295
-        fermis_upper = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_max']), int(N / 2))
-        fermis_lower = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(-tb['chem_pot_min']), int(N / 2))
-        fermis = np.concatenate((-fermis_lower[::-1], fermis_upper[1:]))
-        print(
-            f'Starting to generate lookup tables for T between {np.min(temperatures):.1f} to {np.max(temperatures):.1f} and mu_chem between {np.min(fermis):.1f} and {np.max(fermis):.1f}')
-
-        Tgrid, Efgrid = np.meshgrid(temperatures, fermis)
-
-        self.Ugrid = np.empty((N - 1, N - 1))
-        self.Rgrid = np.empty((N - 1, N - 1))
-
-        for iT, T in enumerate(temperatures):
-            for iF, mu_chem in enumerate(fermis):
-                distr = self.m_j * self.fermi(T, mu_chem)
-                self.Ugrid[iT, iF] = self.inner_energy(distr)
-                self.Rgrid[iT, iF] = np.sum(distr)
-                # print(T,mu_chem, '->', self.Ugrid[iT, iF], self.Rgrid[iT, iF])
-
-        self.Upoints = self.Ugrid.T.flatten()
-        self.Rpoints = self.Rgrid.T.flatten()
-        self.precalc_temperatures_points = Tgrid.flatten()
-        self.precalc_fermi_energies_points = Efgrid.flatten()
-        # self.Urange = self.Ugrid[:,0]
-        # self.Rrange = self.Rgrid[0]
-        print('Lookup tables generated.')
-        if save:
-            savename = 'fermi_lookup_table.npz'
-            print(f'Saving at ./{savename}')
-            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints,
-                     Rgrid=self.Rgrid, Ugrid=self.Ugrid,
-                     temp_points=self.precalc_temperatures_points,
-                     ferm_points=self.precalc_fermi_energies_points)
-        self.Rmin = np.min(self.Rgrid)
-        self.Rmax = np.max(self.Rgrid)
-        self.Umin = np.min(self.Ugrid)
-        self.Umax = np.max(self.Ugrid)
-
-    def load_lookup_tables(self):
-        try:
-            ld = np.load('./fermi_lookup_table.npz')
-        except:
-            raise OSError('Lookup table file not found.')
-        self.Upoints = ld['Upoints']
-        self.Rpoints = ld['Rpoints']
-        self.Ugrid = ld['Ugrid']
-        self.Rgrid = ld['Rgrid']
-        self.precalc_temperatures_points = ld['temp_points']
-        self.precalc_fermi_energies_points = ld['ferm_points']
-        self.Rmin = np.min(self.Rpoints)
-        self.Rmax = np.max(self.Rpoints)
-        self.Umin = np.min(self.Upoints)
-        self.Umax = np.max(self.Upoints)
-        print('Loaded lookup table successfully.')
-
-    def plot_lookup_tables(self):
-        Ugrid, Rgrid = self.Ugrid, self.Rgrid  # np.meshgrid(self.Urange, self.Rrange)
-        temperatures_gr = sc.interpolate.griddata((self.Upoints, self.Rpoints),
-                                                  self.precalc_temperatures_points, (Ugrid, Rgrid), method='nearest')
-        fermi_energies_gr = sc.interpolate.griddata((self.Upoints, self.Rpoints),
-                                                    self.precalc_fermi_energies_points, (Ugrid, Rgrid),
-                                                    method='nearest')
-
-        fig = plt.figure(figsize=(8, 4))
-
-        ax1 = fig.add_subplot(1, 2, 1)
-
-        pl1 = ax1.pcolormesh(Ugrid, Rgrid, temperatures_gr, cmap=plt.cm.coolwarm,
-                             norm=mpl.colors.LogNorm(vmin=200, vmax=1e6),
-                             linewidth=1, shading='nearest')
-        fig.colorbar(pl1)  # , shrink=0.5, aspect=5
-        ax1.set_title('Electron temperature (K)')
-        ax1.set_ylabel('Valence electrons per atom')
-        ax1.set_xlabel('Inner energy per atom (eV)')
-
-        ax2 = fig.add_subplot(1, 2, 2)
-
-        pl2 = ax2.pcolormesh(Ugrid, Rgrid, fermi_energies_gr, cmap=plt.cm.seismic, vmin=-20, vmax=20,
-                             linewidth=1, shading='nearest')
-        fig.colorbar(pl2)  # , shrink=0.5, aspect=5
-        ax2.set_title('Fermi energy shift (eV)')
-        ax2.set_ylabel('Valence electrons per atom')
-        ax2.set_xlabel('Inner energy per atom (eV)')
-        plt.tight_layout()
-
-        fig = plt.figure(figsize=(8, 4))
-
-        ax1 = fig.add_subplot(1, 2, 1)
-
-        pl1 = ax1.pcolormesh(temperatures_gr, fermi_energies_gr, self.Ugrid,
-                             cmap=plt.cm.coolwarm,
-                             linewidth=1, shading='nearest')
-        fig.colorbar(pl1)  # , shrink=0.5, aspect=5
-        ax1.set_title('Inner Energy')
-        ax1.set_xlabel('Temperature')
-        ax1.set_ylabel('Fermi Energy')
-        ax1.set_xscale('log')
-        ax2 = fig.add_subplot(1, 2, 2)
-
-        pl2 = ax2.pcolormesh(temperatures_gr, fermi_energies_gr, self.Rgrid, cmap=plt.cm.seismic,
-                             linewidth=1, shading='nearest')
-        fig.colorbar(pl2)  # , shrink=0.5, aspect=5
-        ax2.set_title('Population')
-        ax2.set_xlabel('Temperature')
-        ax2.set_ylabel('Fermi Energy')
-        ax2.set_xscale('log')
-
-        plt.tight_layout()
-        plt.pause(0.1)
-        plt.show(block=False)
 
 ## Main Simulation
 
 class XNLsim:
-    def __init__(self, par, DEBUG=False, load_tables=True, save_tables = False):
+    def __init__(self, par, DEBUG=False):
         self.DEBUG = DEBUG
         self.intermediate_plots = False
         self.par = par
         self.par.make_derived_params()
-        
 
-        if load_tables:
-            try:
-                self.par.FermiSolver.load_lookup_tables()
-            except OSError:
-                while True:
-                    YN = input('Could not load table. Generate new ones ? (Y/N)')
-                    if YN in ['y', 'Y']:
-                        self.par.FermiSolver.generate_lookup_tables(save_tables)
-                        break
-                    elif YN in ['n', 'N']:
-                        break
-                    else:
-                        print('Invalid answer.')
-        else:
-            self.par.FermiSolver.generate_lookup_tables(save_tables)
 
         # initiate storing intermediate results
         self.call_counter = 0
@@ -862,21 +636,19 @@ class XNLsim:
                 warnings.warn('Negative state density!')
             R = np.sum(current_rho_j)
             U = np.sum(current_rho_j * self.par.E_j)  
-            if iz < 1:
+
                 # When jumping to the surfacem do the safer lookup.
-                T, mu_chem = self.par.FermiSolver.save_lookup_Tmu_from_UR(U, R)#, last_T, last_Ef
-            else:
-                # From then on use the last results as inputs for the solver.
-                T, mu_chem = self.par.FermiSolver.solve(U, R)#, last_T, last_Ef
-                if np.isnan(T):
-                    T, mu_chem = self.par.FermiSolver.lookup_Tmu_from_UR(U, R)#, last_T, last_Ef
-                    
+            T, mu_chem = self.par.FermiSolver.solve(U, R)#, last_T, last_Ef #T, mu_chem
+
+            if iz < 1:
+                self.par.FermiSolver.par0 = T, mu_chem
+
             if self.DEBUG and (iz == 0):
                     print(U, R, '->', T, mu_chem)
             if np.isnan(T):
                 print('!!')
                 warnings.warn('Critical: Could not determine Temperature and Fermi Energy!')
-                
+
             # Buffer solution
             #self.par.last_T_solutions[iz+1, bufferindex] = T
             #self.par.last_Ef_solutions[iz+1, bufferindex] = mu_chem
@@ -978,9 +750,8 @@ class XNLsim:
         ### Also reconstruct the temperatures and Fermi energies
         sol.temperatures = np.zeros((len(sol.t), self.par.Nsteps_z))
         sol.chemical_potentials = np.zeros((len(sol.t), self.par.Nsteps_z))
-        
-        self.par.FermiSolver.par0['T'].value = 300
-        self.par.FermiSolver.par0['mu_chem'].value = 0
+
+        self.par.FermiSolver.par0 = 300,0
 
         sol.inner_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
         for it, t in enumerate(sol.t):
