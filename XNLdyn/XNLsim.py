@@ -379,34 +379,6 @@ class FermiSolver:
             #self.par0 = res.params  # pass solution for the next iteration
             return res.params['T'].value, res.params['mu_chem'].value
 
-    def solve_target_distribution(self, momentary_distribution):
-        """
-        Calculates a target distribution for a specific incident distribution by optimization of mu_chem and T
-        """
-        U_is = self.inner_energy(momentary_distribution)
-        R_is = np.sum(momentary_distribution)  # np.trapz(momentary_distribution, x=self.enax)
-
-        T, mu_chem = self.solve(U_is, R_is)
-        if self.DEBUG: print(U_is, R_is, T, mu_chem)
-        return self.m_j * self.fermi(T, mu_chem)
-
-    def load_lookup_tables(self):
-        try:
-            ld = np.load('./fermi_lookup_table.npz')
-        except:
-            raise OSError('Lookup table file not found.')
-        self.Upoints = ld['Upoints']
-        self.Rpoints = ld['Rpoints']
-        self.Ugrid = ld['Ugrid']
-        self.Rgrid = ld['Rgrid']
-        self.precalc_temperatures_points = ld['temp_points']
-        self.precalc_fermi_energies_points = ld['ferm_points']
-        self.Rmin = np.min(self.Rpoints)
-        self.Rmax = np.max(self.Rpoints)
-        self.Umin = np.min(self.Upoints)
-        self.Umax = np.max(self.Upoints)
-        print('Loaded lookup table successfully.')
-
     def lookup_Tmu_from_UR(self, U_is, R_is, last_T=None, last_mu=None):
         if not (self.Umin-1 < U_is < self.Umax+2):
             warnings.warn(f'U: {U_is} out of bounds of lookup table! (R: {R_is})')
@@ -440,17 +412,74 @@ class FermiSolver:
             print(f'Direct solve worked and lead to: T={T:.1f} and mu_chem={mu_chem:.1f}')
         return T, mu_chem
 
-    def lookup_target_distribution(self, momentary_distribution):
+    def save_lookup_Tmu_from_UR(self, U, R, last_T=None, last_mu=None):
         """
-        Calculates a target distribution for a specific incident distribution by optimization of mu_chem and T
+        This doubles down on precision by first looking up in the tables and then refining the result with an optimization.
         """
-        U_is = self.inner_energy(momentary_distribution)
-        R_is = np.sum(momentary_distribution)  # np.trapz(momentary_distribution, x=self.enax)
+        T, mu_chem = self.lookup_Tmu_from_UR(U, R, last_T=last_T, last_mu=last_mu)
+        self.par0['T'].value = T
+        self.par0['mu_chem'].value = mu_chem
+        T2, Ef2 = self.solve(U, R, last_T=last_T, last_Ef=last_mu)
+        return (T2, Ef2) if np.isfinite(T2) else (T, mu_chem)
 
-        T, mu_chem = self.save_lookup_Tmu_from_UR(U_is, R_is)
+    def generate_lookup_tables(self, save):
+        tb = self.par.lookup_table_data
+        N = tb['size']
+        assert np.mod(N, 2) == 0
+        temperatures = np.logspace(0, np.log10(tb['T_max']), N - 1) + 295
+        fermis_upper = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_max']), int(N / 2))
+        fermis_lower = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(-tb['chem_pot_min']), int(N / 2))
+        fermis = np.concatenate((-fermis_lower[::-1], fermis_upper[1:]))
+        print(
+            f'Starting to generate lookup tables for T between {np.min(temperatures):.1f} to {np.max(temperatures):.1f} and mu_chem between {np.min(fermis):.1f} and {np.max(fermis):.1f}')
 
-        if self.DEBUG: print(U_is, R_is, T, mu_chem)
-        return self.m_j * self.fermi(T, mu_chem)
+        Tgrid, Efgrid = np.meshgrid(temperatures, fermis)
+
+        self.Ugrid = np.empty((N - 1, N - 1))
+        self.Rgrid = np.empty((N - 1, N - 1))
+
+        for iT, T in enumerate(temperatures):
+            for iF, mu_chem in enumerate(fermis):
+                distr = self.m_j * self.fermi(T, mu_chem)
+                self.Ugrid[iT, iF] = self.inner_energy(distr)
+                self.Rgrid[iT, iF] = np.sum(distr)
+                # print(T,mu_chem, '->', self.Ugrid[iT, iF], self.Rgrid[iT, iF])
+
+        self.Upoints = self.Ugrid.T.flatten()
+        self.Rpoints = self.Rgrid.T.flatten()
+        self.precalc_temperatures_points = Tgrid.flatten()
+        self.precalc_fermi_energies_points = Efgrid.flatten()
+        # self.Urange = self.Ugrid[:,0]
+        # self.Rrange = self.Rgrid[0]
+        print('Lookup tables generated.')
+        if save:
+            savename = 'fermi_lookup_table.npz'
+            print(f'Saving at ./{savename}')
+            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints,
+                     Rgrid=self.Rgrid, Ugrid=self.Ugrid,
+                     temp_points=self.precalc_temperatures_points,
+                     ferm_points=self.precalc_fermi_energies_points)
+        self.Rmin = np.min(self.Rgrid)
+        self.Rmax = np.max(self.Rgrid)
+        self.Umin = np.min(self.Ugrid)
+        self.Umax = np.max(self.Ugrid)
+
+    def load_lookup_tables(self):
+        try:
+            ld = np.load('./fermi_lookup_table.npz')
+        except:
+            raise OSError('Lookup table file not found.')
+        self.Upoints = ld['Upoints']
+        self.Rpoints = ld['Rpoints']
+        self.Ugrid = ld['Ugrid']
+        self.Rgrid = ld['Rgrid']
+        self.precalc_temperatures_points = ld['temp_points']
+        self.precalc_fermi_energies_points = ld['ferm_points']
+        self.Rmin = np.min(self.Rpoints)
+        self.Rmax = np.max(self.Rpoints)
+        self.Umin = np.min(self.Upoints)
+        self.Umax = np.max(self.Upoints)
+        print('Loaded lookup table successfully.')
 
     def plot_lookup_tables(self):
         Ugrid, Rgrid = self.Ugrid, self.Rgrid  # np.meshgrid(self.Urange, self.Rrange)
@@ -507,58 +536,6 @@ class FermiSolver:
         plt.tight_layout()
         plt.pause(0.1)
         plt.show(block=False)
-
-    def generate_lookup_tables(self, save):
-        tb = self.par.lookup_table_data
-        N = tb['size']
-        assert np.mod(N, 2) == 0
-        temperatures = np.logspace(0, np.log10(tb['T_max']), N - 1) + 295
-        fermis_upper = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(tb['chem_pot_max']), int(N / 2))
-        fermis_lower = np.logspace(np.log10(tb['chem_pot_minstep']), np.log10(-tb['chem_pot_min']), int(N / 2))
-        fermis = np.concatenate((-fermis_lower[::-1], fermis_upper[1:]))
-        print(
-            f'Starting to generate lookup tables for T between {np.min(temperatures):.1f} to {np.max(temperatures):.1f} and mu_chem between {np.min(fermis):.1f} and {np.max(fermis):.1f}')
-
-        Tgrid, Efgrid = np.meshgrid(temperatures, fermis)
-
-        self.Ugrid = np.empty((N - 1, N - 1))
-        self.Rgrid = np.empty((N - 1, N - 1))
-
-        for iT, T in enumerate(temperatures):
-            for iF, mu_chem in enumerate(fermis):
-                distr = self.m_j * self.fermi(T, mu_chem)
-                self.Ugrid[iT, iF] = self.inner_energy(distr)
-                self.Rgrid[iT, iF] = np.sum(distr)
-                # print(T,mu_chem, '->', self.Ugrid[iT, iF], self.Rgrid[iT, iF])
-
-        self.Upoints = self.Ugrid.T.flatten()
-        self.Rpoints = self.Rgrid.T.flatten()
-        self.precalc_temperatures_points = Tgrid.flatten()
-        self.precalc_fermi_energies_points = Efgrid.flatten()
-        # self.Urange = self.Ugrid[:,0]
-        # self.Rrange = self.Rgrid[0]
-        print('Lookup tables generated.')
-        if save:
-            savename = 'fermi_lookup_table.npz'
-            print(f'Saving at ./{savename}')
-            np.savez(savename, Rpoints=self.Rpoints, Upoints=self.Upoints,
-                     Rgrid=self.Rgrid, Ugrid=self.Ugrid,
-                     temp_points=self.precalc_temperatures_points,
-                     ferm_points=self.precalc_fermi_energies_points)
-        self.Rmin = np.min(self.Rgrid)
-        self.Rmax = np.max(self.Rgrid)
-        self.Umin = np.min(self.Ugrid)
-        self.Umax = np.max(self.Ugrid)
-
-    def save_lookup_Tmu_from_UR(self, U, R, last_T=None, last_mu=None):
-        """
-        This doubles down on precision by first looking up in the tables and then refining the result with an optimization.
-        """
-        T, mu_chem = self.lookup_Tmu_from_UR(U, R, last_T=last_T, last_mu=last_mu)
-        self.par0['T'].value = T
-        self.par0['mu_chem'].value = mu_chem
-        T2, Ef2 = self.solve(U, R, last_T=last_T, last_Ef=last_mu)
-        return (T2, Ef2) if np.isfinite(T2) else (T, mu_chem)
 
 ## Main Simulation
 
