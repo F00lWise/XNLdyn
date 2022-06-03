@@ -1,9 +1,9 @@
-Nsteps_z = 4     # Steps in Z
+Nsteps_z = 2      # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
 timestep_min = 1.3 #fs
 ## Sample data
-Z = 5 #Sample thickness in nm
+Z = 25 #Sample thickness in nm
 atomic_density = 91.4  # atoms per nm³
 photon_bandwidth = 0.8 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
 temperature = 300      # Kelvin
@@ -35,9 +35,9 @@ lookup_table_data =  {'size': 200,
                      'chem_pot_max': 25,
                      'T_max': 250/8.617333262145e-5}
 
-N_j = 100          # Number of points E_j with which the valence system is resolved
-Energy_axis_max = 100
-Energy_axis_fine_until = 30
+N_j = 50          # Number of points E_j with which the valence system is resolved
+Energy_axis_max = 650
+Energy_axis_fine_until = 50
 Energy_axis_min = -10
 
 ## Incident photon profile

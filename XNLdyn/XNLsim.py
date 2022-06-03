@@ -299,7 +299,7 @@ class FermiSolver:
     def __init__(self, par, DEBUG=False):
         self.DEBUG = DEBUG
         self.par = par
-        self.par0 = 300, 10
+        self.par0 = 300., 10.
 
     def fermi(self, T: float, mu_chem: float):
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
@@ -321,9 +321,15 @@ class FermiSolver:
         return U_is - U_target, R_is - R_target
 
     def solve(self, U, R):
-        sol = sc.optimize.root(self.loss_fcn, self.par0, args=(U, R), method='hybr', tol=RTOL)
+        U_max = np.sum(self.par.m_j*self.par.E_j*R/self.par.M_VB)
+        if U < U_max:
+            sol = sc.optimize.root(self.loss_fcn, self.par0, args=(U,R), method='hybr', tol=RTOL**2)
+        else:
+            #there is no thermal distribution possible 
+            print(f'Impossible Energy demanded: U={U:.1f}/{U_max:.1f}')
         T, mu_chem = sol.x
         if T < 0:
+            print(U,R,'->',T, mu_chem)
             raise ValueError('Computed a negative temperature!')
         return T, mu_chem
 
@@ -516,7 +522,7 @@ class XNLsim:
             mn = np.min(holes_j)
             if mn < -RTOL:
                 warnings.warn(f'negative electron hole density found down to: {mn}')
-            holes_j[holes_j < 0] = 0
+            #holes_j[holes_j < 0] = 0
         holes = self.par.M_VB - np.sum(rho_j, 1)  # the sum over j of holes_j/holes has to be 1
         if np.any(holes < 1e-10):
             # TODO: Check why this triggers often in the very first time step - no longer seems to! (?)
@@ -759,6 +765,8 @@ class XNLsim:
                 U = np.sum(sol.rho_j[iz, :, it] * self.par.E_j)
                 R = sol.R_VB[iz, it]
                 T, mu_chem = self.par.FermiSolver.solve(U, R)
+                if iz ==0:
+                    self.par.FermiSolver.par0 = T, mu_chem
                 if np.isnan(T):
                     T, mu_chem = self.par.FermiSolver.save_lookup_Tmu_from_UR(U, R)
                 # if self.DEBUG and (iz==0):
