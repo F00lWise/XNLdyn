@@ -38,8 +38,6 @@ class XNLpars:
         self.N_photens = N_photens  # Number of distict resonant photon energies
 
         self.N_j = N_j
-        
-        self.lookup_table_data = lookup_table_data
 
         self.timestep_min = timestep_min
 
@@ -154,8 +152,8 @@ class XNLpars:
         self.R_core_0 = self.M_core  # Initially fully occupied
         self.R_free_0 = 0  # Initially not occupied
         self.E_free_0 = 0  # Initial energy of kinetic electrons, Initally zero
-        self.rho_j_0 = self.m_j * self.FermiSolver.fermi(temperature, 0)  # occupied acording to initial temperature
-
+        self.rho_j_0 = self.m_j * self.FermiSolver.fermi(temperature*self.kB, 0)  # occupied acording to initial temperature
+        self.U_min = np.sum(self.E_j*self.m_j * self.FermiSolver.fermi(1*self.kB, 0))
         # This vector contains all parameters that are tracked over time
         self.states_per_voxel = 3 + self.N_j  # Just the number of entries for later convenience
         self.state_vector_0 = np.array([
@@ -299,15 +297,18 @@ class FermiSolver:
     def __init__(self, par, DEBUG=False):
         self.DEBUG = DEBUG
         self.par = par
-        self.par0 = 300., 10.
+        self.par0 = 300. * self.par.kB, 0.
 
     def fermi(self, T: float, mu_chem: float):
         # Due to the exponential I get a floating point underflow when calculating the fermi distribution naively, hence the extra effort
-        energy_ratios = (self.par.E_j - mu_chem) / (T * self.par.kB)
+        energy_ratios = (self.par.E_j - mu_chem) / (T)
         fermi_distr = np.zeros(energy_ratios.shape)
-        calculatable = energy_ratios > -15
+        not_too_small = energy_ratios > -200
+        not_too_large = energy_ratios < 200
+        calculatable =  not_too_small & not_too_large
         fermi_distr[calculatable] = 1 / (np.exp(energy_ratios[calculatable]) + 1)
-        fermi_distr[~calculatable] = 1
+        fermi_distr[~not_too_small] = 1
+        fermi_distr[~not_too_large] = 0
         return fermi_distr
 
     def occupation(self, T, mu_chem):
@@ -318,16 +319,48 @@ class FermiSolver:
         occ = self.occupation(T, mu_chem)
         U_is = np.sum(self.par.E_j * occ)
         R_is = np.sum(occ)
-        return U_is - U_target, R_is - R_target
+        return (U_is - U_target), (R_is - R_target)
+
+    def loss_fcn_scalar(self, X, U_target, R_target):
+        T, mu_chem = X
+        occ = self.occupation(T, mu_chem)
+        U_is = np.sum(self.par.E_j * occ)
+        R_is = np.sum(occ)
+        return (U_is - U_target)**2 + (R_is - R_target)**2
 
     def solve(self, U, R):
         U_max = np.sum(self.par.m_j*self.par.E_j*R/self.par.M_VB)
-        if U < U_max:
-            sol = sc.optimize.root(self.loss_fcn, self.par0, args=(U,R), method='hybr', tol=RTOL**2)
-        else:
-            #there is no thermal distribution possible 
+        if U<self.par.U_min:
+            print('Too low of an energy demanded! Setting to min!')
+            U = self.par.U_min
+        if U > U_max:
             print(f'Impossible Energy demanded: U={U:.1f}/{U_max:.1f}')
+
+        sol0 = sc.optimize.root(self.loss_fcn, self.par0, args=(U, R), method='lm', options={'xtol': RTOL *RTOL, 'maxiter': 400})
+        err0 = np.max(np.abs(sol0.fun))
+        sol = sol0
+        err = err0
+
+        if err0 > RTOL:
+            bounds = [[290 * self.par.kB, sol0.x[0] * 2],
+                      [sol0.x[1] - 100, sol0.x[1] + 100]]
+            if bounds[0][0]>bounds[0][1]:
+                bounds[0][1] = 1e8*self.par.kB                         # Up to 100 Million Degrees
+            sol2 = sc.optimize.minimize(self.loss_fcn_scalar, sol0.x, args=(U, R),
+                                       method = 'SLSQP',
+                                       bounds = bounds,
+                                       options = {'ftol':1e-10})
+            err2 = np.max(np.abs(sol2.fun))
+            if self.DEBUG: print('Second computation was needed')
+            sol = sol2
+            err = err2
+
+        if err > RTOL:
+            print(f'Still no good solution - Residual of {err}')
+
         T, mu_chem = sol.x
+
+
         if T < 0:
             print(U,R,'->',T, mu_chem)
             raise ValueError('Computed a negative temperature!')
@@ -420,7 +453,10 @@ class XNLsim:
         result = np.empty((self.par.Nsteps_z, self.par.N_j, self.par.N_photens))
         for iz in range(self.par.Nsteps_z):
             result[iz] = np.outer(valence_change_to_GS[iz], N_Ej[iz, self.par.resonant])
-        return result / (self.par.lambda_nonres* self.par.atomic_density)  # returns z, j,i
+        ret = result / (self.par.lambda_nonres* self.par.atomic_density)
+        if np.any(ret<0):
+            raise ValueError('Negative non-resonant decay!!')
+        return  ret # returns z, j,i
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
@@ -521,11 +557,10 @@ class XNLsim:
         if np.any(holes_j < 0):
             mn = np.min(holes_j)
             if mn < -RTOL:
-                warnings.warn(f'negative electron hole density found down to: {mn}')
+                warnings.warn(f'Negative electron hole density found down to: {mn}')
             #holes_j[holes_j < 0] = 0
-        holes = self.par.M_VB - np.sum(rho_j, 1)  # the sum over j of holes_j/holes has to be 1
+        holes = np.sum(holes_j,1)# self.par.M_VB - np.sum(rho_j, 1)  # the sum over j of holes_j/holes has to be 1
         if np.any(holes < 1e-10):
-            # TODO: Check why this triggers often in the very first time step - no longer seems to! (?)
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
             holes_j[holes_j < 1e-10] *= 0
 
@@ -546,17 +581,15 @@ class XNLsim:
                                   holes_j.T * electrons_to_move / holes).T
 
         if self.DEBUG:
-            check_z_index = 2
+            check_z_index = 1
             elc_error = np.sum(scattering_contribution, 1)[check_z_index]
             if elc_error>RTOL:
                 print('Deviation from electron conservation: ', elc_error)
-            should_be_new_energy = U_electrons[check_z_index]*R_VB + energy_incoming[check_z_index]
-            is_new_energy = np.sum((rho_j[check_z_index] + scattering_contribution) * self.par.E_j, 1)[check_z_index]
-            with np.errstate(invalid='ignore'):
-                ec_error = np.abs(is_new_energy - should_be_new_energy)[check_z_index] / energy_incoming[check_z_index]
-                if ec_error>RTOL:
-                    print('Deviation from energy conservation (%): ',
-                          100 * ec_error)
+            should_be_new_energy = U_electrons[check_z_index]*R_VB[check_z_index] + energy_incoming[check_z_index]
+            is_new_energy = np.sum((rho_j[check_z_index] + scattering_contribution[check_z_index]) * self.par.E_j)
+            ec_error = np.abs(is_new_energy - should_be_new_energy)
+            if ec_error>RTOL:
+                print('Deviation from energy conservation: ', ec_error,' eV')
 
         return without_scattering + scattering_contribution
 
@@ -573,11 +606,14 @@ class XNLsim:
         E_free = self.state_vector[:, 2]
 
         result = np.zeros(self.par.Nsteps_z)
-        interesting = R_free > 0
-        total_nonres = np.sum(nonres_inter[interesting] * self.par.energy_differences[interesting], axis = (1,2))
-        result[interesting] = total_nonres\
-               + np.sum(ch_decay * (self.par.E_j+self.par.E_f), axis = 1)[interesting]\
-               - el_scatt[interesting] * E_free[interesting]/R_free[interesting]
+        with np.errstate(invalid='ignore'):
+            scattering = el_scatt * E_free/R_free
+            scattering[R_free<=0] = 0
+        total_nonres = np.sum(nonres_inter * self.par.energy_differences, axis = (1,2))
+
+        result = total_nonres\
+               + np.sum(ch_decay * (self.par.E_j+self.par.E_f), axis = 1)\
+               - scattering
         return result
 
     ###################
@@ -586,7 +622,9 @@ class XNLsim:
 
     def z_dependence(self, t, state_vector):
         def zstep_euler(self, N, state_vector, iz):
-            return N + self.rate_N_dz_j_direct(N, state_vector[iz, :]) * self.par.zstepsize * self.par.atomic_density
+            res = N + self.rate_N_dz_j_direct(N, state_vector[iz, :]) * self.par.zstepsize * self.par.atomic_density
+            res[res<0] =0 #For large z-steps this can happen, but there cannot be a negative number of photons
+            return res
 
         def double_zstep_RK(self, N, state_vector, iz):
             """
@@ -596,7 +634,9 @@ class XNLsim:
             k2 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k1, state_vector[iz + 1, :])
             k3 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k2, state_vector[iz + 1, :])
             k4 = self.rate_N_dz_j_direct(N + self.par.zstepsize * 2 * k3, state_vector[iz + 2, :])
-            return N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4) *self.par.atomic_density
+            res = N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4) *self.par.atomic_density
+            res[res < 0] = 0  # For large z-steps this can happen, but there cannot be a negative number of photons
+            return res
 
         # get current photon irradiation:
         N_Ej_z = np.zeros((self.par.Nsteps_z+1, self.par.N_j))
@@ -611,13 +651,28 @@ class XNLsim:
             N_Ej_z[iz, :] = double_zstep_RK(self, N_Ej_z[iz - 2, :], state_vector, iz - 2)
         N_Ej_z[-1, :] = zstep_euler(self, N_Ej_z[-2, :], state_vector, self.par.Nsteps_z-1)  # Last step back into vacuum with euler
 
+        if np.any(N_Ej_z<0):
+            print('wait a second!')
         return N_Ej_z
 
     ##########################################################
     ### Main differential describing the time evolution of voxels
     ##########################################################
 
-        
+    def assert_physicality(self):
+        ## Check for values that escape meaningful physics
+
+        if np.any(self.state_vector<0):
+            if np.any(self.state_vector<-RTOL):
+                warnings.warn('Some states tried to become significantly negative!')
+            self.state_vector[self.state_vector<0] = 0
+
+        if np.any(self.state_vector[:,0]>self.par.M_core):
+            if np.any(self.state_vector[:,0])>(self.par.M_core*(1+RTOL)):
+                warnings.warn('Core states tried to become significantly greater than allowed!')
+            self.state_vector[:,0][self.state_vector[:,0]>self.par.M_core] = self.par.M_core
+
+        #Continure for otehr ..
     def time_derivative(self, t, state_vector_flat):
         if self.DEBUG: print('t: ', t)
         #bufferindex = np.mod(self.call_counter, self.par.solution_buffersize)  # For sultion buffering
@@ -630,6 +685,9 @@ class XNLsim:
         global RTOL
         # Reshape the state vector into sensible dimension
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
+
+        # Option to enforce meaningful values - usually not necessary/does not change anything
+        #self.assert_physicality()
 
         # Determine thermalized distributions
         for iz, z in enumerate(self.par.zaxis[:]):
@@ -650,7 +708,7 @@ class XNLsim:
                 self.par.FermiSolver.par0 = T, mu_chem
 
             if self.DEBUG and (iz == 0):
-                    print(U, R, '->', T, mu_chem)
+                    print(U, R, '->', T/self.par.kB, mu_chem)
             if np.isnan(T):
                 print('!!')
                 warnings.warn('Critical: Could not determine Temperature and Fermi Energy!')
@@ -672,6 +730,7 @@ class XNLsim:
         derivatives[:, 1] = self.rate_free(nonres_inter, ch_decay, el_scatt)
         derivatives[:, 2] = self.rate_E_free(nonres_inter, ch_decay, el_scatt)
         derivatives[:, 3:] = self.rate_j(res_inter,nonres_inter,ch_decay,el_therm,el_scatt)
+
 
         # Debug plotting
         if self.intermediate_plots:
@@ -713,7 +772,7 @@ class XNLsim:
         plt.plot(self.par.zaxis, state_vector[:, 1], label='Free electrons')
         plt.plot(self.par.zaxis, (state_vector[:, 2] - self.par.R_VB_0) / self.par.M_VB,
                  label='VB occupation variation')
-        plt.plot(self.par.zaxis, state_vector[:, 3] - 300, label='T')
+        plt.plot(self.par.zaxis, state_vector[:, 3] / self.par.kB - 300, label='T')
         plt.plot(self.par.zaxis, state_vector[:, 4], label='E')
         plt.plot(self.par.zaxis, state_vector[:, 5:] / self.par.M_Ej, label='Resonant occupations')
         plt.legend()
@@ -757,7 +816,7 @@ class XNLsim:
         sol.temperatures = np.zeros((len(sol.t), self.par.Nsteps_z))
         sol.chemical_potentials = np.zeros((len(sol.t), self.par.Nsteps_z))
 
-        self.par.FermiSolver.par0 = 300,0
+        self.par.FermiSolver.par0 = 300 * self.par.kB,0
 
         sol.inner_energies = np.zeros((len(sol.t),self.par.Nsteps_z))
         for it, t in enumerate(sol.t):
@@ -797,8 +856,8 @@ class XNLsim:
 
         plt.sca(axes[1, 0])
         plt.title('Energies Averaged over z')
-        plt.plot(sol.t, sol.temperatures[:, 0]*PAR.kB, 'C0', label='Temperature')
-        plt.plot(sol.t, sol.temperatures[:,1:]*PAR.kB, 'C0', lw = 0.5)
+        plt.plot(sol.t, sol.temperatures[:, 0], 'C0', label='Temperature (eV)')
+        plt.plot(sol.t, sol.temperatures[:,1:], 'C0', lw = 0.5)
 
         plt.ylabel('T (eV)',color='C0')
         plt.legend(loc='upper left')

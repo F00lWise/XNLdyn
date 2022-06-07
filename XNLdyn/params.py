@@ -1,7 +1,7 @@
-Nsteps_z = 2      # Steps in Z
+Nsteps_z = 25      # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
-timestep_min = 1.3 #fs
+timestep_min = 0.3 #fs
 ## Sample data
 Z = 25 #Sample thickness in nm
 atomic_density = 91.4  # atoms per nm³
@@ -20,28 +20,22 @@ DoS_band_dd_end = 3.15
 ## Rates and cross sections
 
 tau_CH = 11.42           # Core hole lifetime / fs
-tau_th = 1           # Redistribution time of electrons in the VB / fs
-tau_free = 30          # Free electron lifetime
+tau_th = 1000             # Redistribution time of electrons in the VB / fs
+tau_free = 40          # Free electron lifetime
 lambda_res_Ei = (10,)  # Absorptions length of resonant photon energies / nm
 lambda_nonres = 190    # Absorption length of non-resonant photons, assumed equal for all / nm
 
 ## Fermi Energy
 E_f = 850.7 #eV
 
-# Size of the lookup tables for connecting inner energy and population to chemical potential and temperature
-lookup_table_data =  {'size': 200,
-                     'chem_pot_minstep': 0.05,
-                     'chem_pot_min': -350,
-                     'chem_pot_max': 25,
-                     'T_max': 250/8.617333262145e-5}
 
 N_j = 50          # Number of points E_j with which the valence system is resolved
-Energy_axis_max = 650
-Energy_axis_fine_until = 50
+Energy_axis_max = 200
+Energy_axis_fine_until = 30
 Energy_axis_min = -10
 
 ## Incident photon profile
 I0       = [3,]   # Pulse energy density in photons per nm²
 t0       = [0,]   # Arrival time on time-axis / fs
-tdur_sig = [4,]  # Rms pulse duration / fs
+tdur_sig = [4,]   # Rms pulse duration / fs
 E_i      = [858,] # Photon Energies of incident pulses / eV
