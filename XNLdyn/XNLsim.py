@@ -455,7 +455,9 @@ class XNLsim:
             result[iz] = np.outer(valence_change_to_GS[iz], N_Ej[iz, self.par.resonant])
         ret = result / (self.par.lambda_nonres* self.par.atomic_density)
         if np.any(ret<0):
-            raise ValueError('Negative non-resonant decay!!')
+            if np.min(ret)<-RTOL:
+                raise ValueError('Significant negative non-resonant decay!!')
+            ret[ret<0] = 0
         return  ret # returns z, j,i
 
     # Core-hole decay
@@ -522,9 +524,9 @@ class XNLsim:
         ch_decay = self.proc_ch_decay(R_core, rho_j)
         el_therm = self.proc_el_therm(rho_j, r_j)
         el_scatt = self.proc_free_scatt(R_free)
-        en_free = self.mean_free_el_energy(R_free, E_free)
+        #en_free = self.mean_free_el_energy(R_free, E_free)
 
-        return res_inter, nonres_inter, ch_decay, el_therm, el_scatt, en_free
+        return res_inter, nonres_inter, ch_decay, el_therm, el_scatt#, en_free
 
     def rate_N_dz_j_direct(self, N_Ej, states):
         """
@@ -559,26 +561,44 @@ class XNLsim:
             if mn < -RTOL:
                 warnings.warn(f'Negative electron hole density found down to: {mn}')
             #holes_j[holes_j < 0] = 0
-        holes = np.sum(holes_j,1)# self.par.M_VB - np.sum(rho_j, 1)  # the sum over j of holes_j/holes has to be 1
+        holes = np.sum(holes_j,1)  # the sum over j of holes_j/holes has to be 1
         if np.any(holes < 1e-10):
             warnings.warn(f'Number of holes got critically low for computational accuracy.')
             holes_j[holes_j < 1e-10] *= 0
 
+        # This is the electrons which come back to the VB after they have scattered multiple times
+        direct_scattering = ((holes_j.T / holes) * el_scatt).T
+        energy_direct_scattering = np.sum((((holes_j.T / holes) * el_scatt).T) * self.par.E_j, 1) # This is how much energy they bring to the VB
+
         # all processes except scattering
         without_scattering = res_inter - np.sum(nonres_inter, axis=2) - direct_augers - \
-                             indirect_augers + el_therm + ((holes_j.T / holes) * el_scatt).T
+                             indirect_augers + el_therm + direct_scattering
+
+        # Check the energy balance
+        if self.DEBUG:
+            energy_VB_before = np.sum(rho_j*self.par.E_j,1)
+
+            energy_res_inter = np.sum(res_inter*self.par.E_j,1)
+            energy_nonres_inter = np.sum(np.sum(nonres_inter, axis=2)*self.par.E_j,1)
+            energy_direct_augers = np.sum(direct_augers*self.par.E_j,1)
+            energy_indirect_augers = np.sum(indirect_augers*self.par.E_j,1)
+            energy_all_augers = energy_indirect_augers+energy_direct_augers
+            energy_el_therm = np.sum(el_therm*self.par.E_j,1)
+            #energy_direct_scattering = np.sum((((holes_j.T / holes) * el_scatt).T) * self.par.E_j,1)
+            energy_change = energy_res_inter - energy_nonres_inter - energy_all_augers + energy_el_therm +energy_direct_scattering
 
         # Now calculate redistribution from scattering
         R_free = self.state_vector[:, 1]
         E_free = self.state_vector[:, 2]
         with np.errstate(invalid='ignore'):
-            energy_incoming = el_scatt * E_free / R_free  # This much energy is coming in
+            energy_incoming = (el_scatt * E_free / R_free) - energy_direct_scattering # This much energy is coming in
             np.nan_to_num(energy_incoming, copy=False, nan=0)  # Catching results of 0/0
             U_electrons = np.sum(rho_j * self.par.E_j, 1) / R_VB  # This much energy per el is in the electron distribution
             U_holes = np.sum(holes_j * self.par.E_j, 1) / holes  # This much energy per hole fits into the remaining holes
             electrons_to_move = energy_incoming / (-U_electrons + U_holes)
         scattering_contribution = (-rho_j.T * electrons_to_move / R_VB + 
                                   holes_j.T * electrons_to_move / holes).T
+
 
         if self.DEBUG:
             check_z_index = 1
@@ -600,7 +620,6 @@ class XNLsim:
         return np.sum(nonres_inter, axis=(1,2)) + np.sum(ch_decay, axis = 1) - el_scatt
 
     def rate_E_free(self, nonres_inter, ch_decay, el_scatt):
-        # TODO: Negative energies at beginning of simulation - strange!
 
         R_free = self.state_vector[:, 1]
         E_free = self.state_vector[:, 2]
@@ -611,8 +630,9 @@ class XNLsim:
             scattering[R_free<=0] = 0
         total_nonres = np.sum(nonres_inter * self.par.energy_differences, axis = (1,2))
 
+        ch_en_rate = np.sum(ch_decay * (self.par.E_f+self.par.E_j), axis = 1) #
         result = total_nonres\
-               + np.sum(ch_decay * (self.par.E_j+self.par.E_f), axis = 1)\
+               + ch_en_rate\
                - scattering
         return result
 
@@ -659,7 +679,7 @@ class XNLsim:
     ### Main differential describing the time evolution of voxels
     ##########################################################
 
-    def assert_physicality(self):
+    def assert_positive_densities(self):
         ## Check for values that escape meaningful physics
 
         if np.any(self.state_vector<0):
@@ -667,10 +687,6 @@ class XNLsim:
                 warnings.warn('Some states tried to become significantly negative!')
             self.state_vector[self.state_vector<0] = 0
 
-        if np.any(self.state_vector[:,0]>self.par.M_core):
-            if np.any(self.state_vector[:,0])>(self.par.M_core*(1+RTOL)):
-                warnings.warn('Core states tried to become significantly greater than allowed!')
-            self.state_vector[:,0][self.state_vector[:,0]>self.par.M_core] = self.par.M_core
 
         #Continure for otehr ..
     def time_derivative(self, t, state_vector_flat):
@@ -687,7 +703,7 @@ class XNLsim:
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
 
         # Option to enforce meaningful values - usually not necessary/does not change anything
-        #self.assert_physicality()
+        self.assert_positive_densities()
 
         # Determine thermalized distributions
         for iz, z in enumerate(self.par.zaxis[:]):
@@ -721,8 +737,10 @@ class XNLsim:
         # Calculate photon transmission as save it
         N_Ej_z = self.z_dependence(t, self.state_vector)
 
+        if t > 5:
+            print('Jump in')
         # res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
-        res_inter, nonres_inter, ch_decay, el_therm, el_scatt, en_free = self.calc_processes(N_Ej_z[:-1, :], self.state_vector[:, :], self.target_distributions)
+        res_inter, nonres_inter, ch_decay, el_therm, el_scatt  = self.calc_processes(N_Ej_z[:-1, :], self.state_vector[:, :], self.target_distributions)
         
         
         derivatives = np.empty(self.state_vector.shape)
