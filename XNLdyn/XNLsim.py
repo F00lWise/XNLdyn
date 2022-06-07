@@ -13,9 +13,6 @@ np.errstate(divide='raise')  # Raise division by zero as error if nominator is n
 
 RTOL = 1e-5
 
-#TODO: Work on the problem that some energy values do not work when they are close to set values.
-
-
 def check_bounds(value, min=0 - RTOL, max=1. + RTOL, message=''):
     if np.any(value < min):
         string = f'Found value up to {np.min(value[value < min]) - min:.3e} under minimum of {min}.' + message
@@ -75,12 +72,7 @@ class XNLpars:
         self.E_i_abs = np.array(E_i)
         self.E_i = np.empty(N_photens)  # defined below
         
-        
-        #self.solution_buffersize = 10
-        #self.last_T_solutions  = np.full((1+self.Nsteps_z,self.solution_buffersize), fill_value=300.)
-        #self.last_Ef_solutions = np.full((1+self.Nsteps_z,self.solution_buffersize), fill_value=0.)
-        #self.last_T_solutions[0,:] = -np.inf # Timestamps for initialized values
-        #self.last_Ef_solutions[0,:] = -np.inf
+
         assert (N_photens == len(I0) == len(t0) == len(tdur_sig) == len(E_i) == len(lambda_res_Ei)), \
             'Make sure all photon pulses get all parameters!'
 
@@ -516,7 +508,7 @@ class XNLsim:
 
         R_core = states[:, 0]
         R_free = states[:, 1]
-        E_free = states[:, 2]
+        #E_free = states[:, 2]
         rho_j = states[:, 3:]
         
         res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
@@ -574,18 +566,17 @@ class XNLsim:
         without_scattering = res_inter - np.sum(nonres_inter, axis=2) - direct_augers - \
                              indirect_augers + el_therm + direct_scattering
 
-        # Check the energy balance
-        if self.DEBUG:
-            energy_VB_before = np.sum(rho_j*self.par.E_j,1)
-
-            energy_res_inter = np.sum(res_inter*self.par.E_j,1)
-            energy_nonres_inter = np.sum(np.sum(nonres_inter, axis=2)*self.par.E_j,1)
-            energy_direct_augers = np.sum(direct_augers*self.par.E_j,1)
-            energy_indirect_augers = np.sum(indirect_augers*self.par.E_j,1)
-            energy_all_augers = energy_indirect_augers+energy_direct_augers
-            energy_el_therm = np.sum(el_therm*self.par.E_j,1)
-            #energy_direct_scattering = np.sum((((holes_j.T / holes) * el_scatt).T) * self.par.E_j,1)
-            energy_change = energy_res_inter - energy_nonres_inter - energy_all_augers + energy_el_therm +energy_direct_scattering
+        # Check the energy balance (Only for specific debugging)
+        # if False and self.DEBUG:
+        #     energy_VB_before = np.sum(rho_j*self.par.E_j,1)
+        #     energy_res_inter = np.sum(res_inter*self.par.E_j,1)
+        #     energy_nonres_inter = np.sum(np.sum(nonres_inter, axis=2)*self.par.E_j,1)
+        #     energy_direct_augers = np.sum(direct_augers*self.par.E_j,1)
+        #     energy_indirect_augers = np.sum(indirect_augers*self.par.E_j,1)
+        #     energy_all_augers = energy_indirect_augers+energy_direct_augers
+        #     energy_el_therm = np.sum(el_therm*self.par.E_j,1)
+        #     energy_direct_scattering = np.sum((((holes_j.T / holes) * el_scatt).T) * self.par.E_j,1)
+        #     energy_change = energy_res_inter - energy_nonres_inter - energy_all_augers + energy_el_therm + energy_direct_scattering
 
         # Now calculate redistribution from scattering
         R_free = self.state_vector[:, 1]
@@ -681,7 +672,6 @@ class XNLsim:
 
     def assert_positive_densities(self):
         ## Check for values that escape meaningful physics
-
         if np.any(self.state_vector<0):
             if np.any(self.state_vector<-RTOL):
                 warnings.warn('Some states tried to become significantly negative!')
@@ -691,35 +681,24 @@ class XNLsim:
         #Continure for otehr ..
     def time_derivative(self, t, state_vector_flat):
         if self.DEBUG: print('t: ', t)
-        #bufferindex = np.mod(self.call_counter, self.par.solution_buffersize)  # For sultion buffering
-        #last_solution_bufferindex = np.argsort(self.par.last_T_solutions[0,:])[-1] # Highest time of previous solutions
-        #self.par.last_T_solutions[0, bufferindex] = t # set timestamp
-        #self.par.last_Ef_solutions[0, bufferindex] = t
 
-        #T_buffer = self.par.last_T_solutions
-        #Ef_buffer = self.par.last_Ef_solutions
         global RTOL
         # Reshape the state vector into sensible dimension
         self.state_vector = state_vector_flat.reshape(self.par.Nsteps_z, self.par.states_per_voxel)
 
-        # Option to enforce meaningful values - usually not necessary/does not change anything
+        # Option to enforce meaningful values - usually not necessary but
         self.assert_positive_densities()
 
         # Determine thermalized distributions
         for iz, z in enumerate(self.par.zaxis[:]):
-            # Read last solution
-            #last_T = self.par.last_T_solutions[iz+1,last_solution_bufferindex]
-            #last_Ef = self.par.last_Ef_solutions[iz+1,last_solution_bufferindex]
-
             current_rho_j = self.state_vector[iz, 3:]
-            if np.any(current_rho_j < -RTOL):
-                warnings.warn('Negative state density!')
+
             R = np.sum(current_rho_j)
             U = np.sum(current_rho_j * self.par.E_j)  
 
-                # When jumping to the surfacem do the safer lookup.
-            T, mu_chem = self.par.FermiSolver.solve(U, R)#, last_T, last_Ef #T, mu_chem
+            T, mu_chem = self.par.FermiSolver.solve(U, R)#
 
+            # If on the surface, reset par0
             if iz < 1:
                 self.par.FermiSolver.par0 = T, mu_chem
 
@@ -729,18 +708,12 @@ class XNLsim:
                 print('!!')
                 warnings.warn('Critical: Could not determine Temperature and Fermi Energy!')
 
-            # Buffer solution
-            #self.par.last_T_solutions[iz+1, bufferindex] = T
-            #self.par.last_Ef_solutions[iz+1, bufferindex] = mu_chem
             self.target_distributions[iz, :] = self.par.FermiSolver.fermi(T, mu_chem) * self.par.m_j
 
         # Calculate photon transmission as save it
         N_Ej_z = self.z_dependence(t, self.state_vector)
 
-        if t > 5:
-            print('Jump in')
-        # res_inter, nonres_inter, ch_decay, el_therm, el_scatt, mean_free, mean_valence
-        res_inter, nonres_inter, ch_decay, el_therm, el_scatt  = self.calc_processes(N_Ej_z[:-1, :], self.state_vector[:, :], self.target_distributions)
+        res_inter, nonres_inter, ch_decay, el_therm, el_scatt = self.calc_processes(N_Ej_z[:-1, :], self.state_vector[:, :], self.target_distributions)
         
         
         derivatives = np.empty(self.state_vector.shape)

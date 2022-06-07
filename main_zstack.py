@@ -11,7 +11,7 @@ if __name__ == '__main__':
     ## Set up the problem
     PAR = XNLdyn.XNLpars()
 
-    pulse_energy_J = 8e-16 # J
+    pulse_energy_J = 8e-12 # J
 
     PAR.I0_i = [XNLdyn.photons_per_J(PAR.E_i_abs[0])*pulse_energy_J]
     print('Photon numbers per atom for this simulation: ', np.array(PAR.I0_i)/PAR.atomic_density)

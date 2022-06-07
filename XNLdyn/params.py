@@ -1,4 +1,4 @@
-Nsteps_z = 100      # Steps in Z
+Nsteps_z = 50      # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
 timestep_min = 0.3 #fs
@@ -29,9 +29,9 @@ lambda_nonres = 190    # Absorption length of non-resonant photons, assumed equa
 E_f = 850.7 #eV
 
 
-N_j = 200          # Number of points E_j with which the valence system is resolved
-Energy_axis_max = 200
-Energy_axis_fine_until = 50
+N_j = 100          # Number of points E_j with which the valence system is resolved
+Energy_axis_max = 600
+Energy_axis_fine_until = 20
 Energy_axis_min = -10
 
 ## Incident photon profile
