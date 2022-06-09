@@ -1,4 +1,4 @@
-Nsteps_z = 40      # Steps in Z
+Nsteps_z = 200      # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
 timestep_min = 0.5 #fs
@@ -19,8 +19,8 @@ DoS_band_dd_end = 3.
 ## Rates and cross sections
 
 tau_CH = 11.42         # Core hole lifetime / fs
-tau_th = 10    # Redistribution time of electrons in the VB / fs
-tau_free = 40e20         # Free electron lifetime
+tau_th = 2    # Redistribution time of electrons in the VB / fs
+tau_free = 30         # Free electron lifetime
 lambda_res_Ei = (3,)  # Absorptions length of resonant photon energies / nm
 lambda_nonres = 1e20    # Absorption length of non-resonant photons, assumed equal for all / nm
 

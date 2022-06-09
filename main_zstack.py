@@ -20,7 +20,7 @@ if __name__ == '__main__':
 
     #PAR.FermiSolver.plot_lookup_tables()
 
-    sim_options = dict(t_span=[-10, 35], method='RK45', rtol=1e-4, atol=1e-8, plot=True, return_full_solution=True)
+    sim_options = dict(t_span=[-10, 35], method='RK45', rtol=1e-5, atol=1e-8, plot=True, return_full_solution=True)
 
     incident, transmitted, sol = sim.run(**sim_options)
 
