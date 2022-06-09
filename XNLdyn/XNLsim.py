@@ -157,7 +157,7 @@ class XNLpars:
         # This is a constant matrix needed in rate_free()
         self.energy_differences = np.zeros((self.Nsteps_z, self.N_j, self.N_photens))
         for i in range(self.N_photens):
-            self.energy_differences[:, :, i] = self.E_j + (self.E_i[i] + self.E_f)
+            self.energy_differences[:, :, i] = self.E_j +(self.E_i[i] + self.E_f) #
 
     # def get_resonant_states(self, emin, emax, npoints=10):
     #     """
@@ -429,9 +429,7 @@ class XNLsim:
     def proc_res_inter_Ej(self, N_Ej, R_core, rho_j):
         core_occupation = np.outer((R_core / self.par.M_core), np.ones(self.par.N_j))
         valence_occupation = rho_j / self.par.m_j  # relative to the states at that energy
-        #gs_intensity = np.zeros(valence_occupation.shape)
-        #gs_intensity[:, self.par.resonant] = N_Ej[:, self.par.resonant] / (self.par.lambda_res_Ei * self.par.atomic_density)
-        gs_intensity = N_Ej * self.par.lambda_res_Ej_inverse / self.par.atomic_density
+        gs_intensity = N_Ej * self.par.lambda_res_Ej_inverse
         if self.DEBUG:
             check_bounds(core_occupation, message='Valence occupation in proc_res_inter_Ej()')
             check_bounds(valence_occupation, message='Valence occupation in proc_res_inter_Ej()')
@@ -445,12 +443,14 @@ class XNLsim:
         result = np.empty((self.par.Nsteps_z, self.par.N_j, self.par.N_photens))
         for iz in range(self.par.Nsteps_z):
             result[iz] = np.outer(valence_change_to_GS[iz], N_Ej[iz, self.par.resonant])
-        ret = result / (self.par.lambda_nonres* self.par.atomic_density)
+        ret = result / (self.par.lambda_nonres)
         if np.any(ret<0):
             if np.min(ret)<-RTOL:
                 raise ValueError('Significant negative non-resonant decay!!')
             ret[ret<0] = 0
-        return  ret # returns z, j,i
+
+        #print(f'Finding nonres inter of {np.sum(ret,(1,2))} (normal)')
+        return ret # returns z, j,i
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
@@ -511,8 +511,8 @@ class XNLsim:
         #E_free = states[:, 2]
         rho_j = states[:, 3:]
         
-        res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)
-        nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)
+        res_inter = self.proc_res_inter_Ej(N_Ej, R_core, rho_j)/self.par.atomic_density
+        nonres_inter = self.proc_nonres_inter(N_Ej, rho_j)/self.par.atomic_density
         ch_decay = self.proc_ch_decay(R_core, rho_j)
         el_therm = self.proc_el_therm(rho_j, r_j)
         el_scatt = self.proc_free_scatt(R_free)
@@ -531,13 +531,13 @@ class XNLsim:
         # Resonant
         core_occupation = (R_core / self.par.M_core)
         valence_occupation = rho_j / self.par.m_j  # relative to the states at that energy
-        res_inter =  (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse/ self.par.atomic_density)
+        res_inter =  (core_occupation.T - valence_occupation.T).T * (N_Ej * self.par.lambda_res_Ej_inverse)
 
         # Non-resonant
         valence_change_to_GS = rho_j / self.par.R_VB_0  # relative to the number valence states in the ground state
-        nonres_inter = np.outer(valence_change_to_GS, N_Ej) / (self.par.lambda_nonres * self.par.atomic_density)  # returns j,i
-
+        nonres_inter = np.outer(valence_change_to_GS, N_Ej) / (self.par.lambda_nonres)  # returns j,i
         return -res_inter - np.sum(nonres_inter,0)
+
     ############################
     ### Rates - time derivatives
     ############################
@@ -634,7 +634,7 @@ class XNLsim:
 
     def z_dependence(self, t, state_vector):
         def zstep_euler(self, N, state_vector, iz):
-            res = N + self.rate_N_dz_j_direct(N, state_vector[iz, :]) * self.par.zstepsize * self.par.atomic_density
+            res = N + self.rate_N_dz_j_direct(N, state_vector[iz, :]) * self.par.zstepsize# * self.par.atomic_density
             res[res<0] =0 #For large z-steps this can happen, but there cannot be a negative number of photons
             return res
 
@@ -646,7 +646,7 @@ class XNLsim:
             k2 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k1, state_vector[iz + 1, :])
             k3 = self.rate_N_dz_j_direct(N + self.par.zstepsize * k2, state_vector[iz + 1, :])
             k4 = self.rate_N_dz_j_direct(N + self.par.zstepsize * 2 * k3, state_vector[iz + 2, :])
-            res = N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4) *self.par.atomic_density
+            res = N + 0.3333333333333333 * self.par.zstepsize * (k1 + 2 * k2 + 2 * k3 + k4)
             res[res < 0] = 0  # For large z-steps this can happen, but there cannot be a negative number of photons
             return res
 
@@ -661,7 +661,8 @@ class XNLsim:
         N_Ej_z[1, :] = zstep_euler(self, N_Ej_z[0, :], state_vector, 0)  # First step with euler
         for iz in range(2, self.par.Nsteps_z):
             N_Ej_z[iz, :] = double_zstep_RK(self, N_Ej_z[iz - 2, :], state_vector, iz - 2)
-        N_Ej_z[-1, :] = zstep_euler(self, N_Ej_z[-2, :], state_vector, self.par.Nsteps_z-1)  # Last step back into vacuum with euler
+        N_Ej_z[-1, :] = zstep_euler(self, N_Ej_z[-2, :], state_vector, N_Ej_z.shape[0]-2)  # Last step back into vacuum with euler
+
 
         if np.any(N_Ej_z<0):
             print('wait a second!')
@@ -746,9 +747,13 @@ class XNLsim:
         else:
             plt.sca(self.axis_z)
 
-        plt.plot(self.par.zedges, N_Ej_z[:,self.par.resonant])
+        plt.plot(self.par.zedges, N_Ej_z[:,self.par.resonant]/N_Ej_z[0,self.par.resonant],'.-')
+        plt.plot(self.par.zedges, np.exp(-((self.par.zedges/self.par.lambda_nonres)+(self.par.zedges/self.par.lambda_res_Ei[0]))), color = 'C3', label = 'Total GS')
+        plt.plot(self.par.zedges, np.exp(-(self.par.zedges/self.par.lambda_nonres)), ls='--', label = 'Non-resonant GS')
+        plt.plot(self.par.zedges, np.exp(-(self.par.zedges/self.par.lambda_res_Ei[0])), ls=':', label = 'Resonant GS')
+        plt.legend()
         plt.xlabel('z')
-        plt.ylabel('Photon density')
+        plt.ylabel('Transmission')
         self.axis_z.set_title(f'Z-Dependence')
         print(f'Transmission = {100* N_Ej_z[:,self.par.resonant][-1]/N_Ej_z[:,self.par.resonant][0]} %')
 
@@ -872,14 +877,8 @@ class XNLsim:
             plt.plot(sol.t, sol_photon_densities[-1, iE, :].T, c=cols[iE],
                      label=f'Transmitted')
 
-        # plt.plot(sol.t, sol_photon_densities[-1, :, :].T,
-        #         label=[f'Transmitted {PAR.E_i[i]:.0f} eV,  {PAR.lambda_res_Ei[i]:.2f} nm' for i in
-        #                range(PAR.N_photens)])
-
-        # plt.plot(sol.t, sol_photon_densities[0, :, :].T,
-        #         label=[f'Incident {PAR.E_i[i]:.0f} eV,  {PAR.lambda_res_Ei[i]:.2f} nm' for i in range(PAR.N_photens)])
         plt.legend()
-        plt.ylabel('T')
+        plt.ylabel('Photons / nm²')
         plt.xlabel('t (fs)')
 
         plt.sca(axes[2, 0])
@@ -893,14 +892,16 @@ class XNLsim:
         plt.legend()
 
         plt.sca(axes[2, 1])
-        T = (sol.photon_densities[-1] - sol.photon_densities[0])  # /np.max(sol.photon_densities[0],1)
+        T = (sol.photon_densities[-1] / sol.photon_densities[0])  # /np.max(sol.photon_densities[0],1)
         for iE, E in enumerate(PAR.E_i):
             plt.plot(sol.t, T[iE], c=cols[iE], label=f'change at {E:.2f} eV')
+        plt.axhline(np.exp(-self.par.Z/self.par.lambda_nonres), lw=0.3)
+        plt.axhline(np.exp(-self.par.Z/self.par.lambda_res_Ei[0]), lw=0.3)
         plt.axhline(c='k', lw=0.3)
         plt.legend()
-        plt.title('Transmitted - Incident photons')
+        plt.title('Transmitted / Incident photons')
         plt.xlabel('time (fs)')
-        plt.ylabel('Photons per atom')
+        plt.ylabel('Rel. Transmission')
 
 
         plt.sca(axes[3, 0])
