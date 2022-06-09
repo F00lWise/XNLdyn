@@ -457,7 +457,7 @@ class XNLsim:
         core_holes = (self.par.M_core - R_core)  # z
         R_VB = np.sum(rho_j, axis=1)
         valence_resonant_occupation = rho_j / (self.par.m_j)  # rho_j_0 # z, j
-        valence_resonant_occupation_share = (valence_resonant_occupation.T / R_VB).T
+        valence_resonant_occupation_share = (valence_resonant_occupation.T / self.par.R_VB_0).T
         valence_total_occupation_change = R_VB / self.par.R_VB_0
         return (core_holes.T * valence_resonant_occupation_share.T * valence_total_occupation_change).T / self.par.tau_CH
 
@@ -551,8 +551,9 @@ class XNLsim:
         if np.any(holes_j < 0):
             mn = np.min(holes_j)
             if mn < -RTOL:
-                warnings.warn(f'Negative electron hole density found down to: {mn}')
-            #holes_j[holes_j < 0] = 0
+                warnings.warn(f'Found negative electron hole density down to {mn}')
+            #rho_j[rho_j>self.par.m_j] = self.par.m_j[rho_j>self.par.m_j]
+            #holes_j = self.par.m_j - rho_j
         holes = np.sum(holes_j,1)  # the sum over j of holes_j/holes has to be 1
         if np.any(holes < 1e-10):
             warnings.warn(f'Number of holes got critically low for computational accuracy.')

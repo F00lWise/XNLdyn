@@ -1,11 +1,11 @@
-Nsteps_z = 50      # Steps in Z
+Nsteps_z = 10      # Steps in Z
 N_photens= 1      # Number of distinct incident resonant photon energies E_i
 
-timestep_min = 0.3 #fs
+timestep_min = 0.5 #fs
 ## Sample data
-Z = 25 #Sample thickness in nm
+Z = 20 #Sample thickness in nm
 atomic_density = 91.4  # atoms per nm³
-photon_bandwidth = 0.8 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
+photon_bandwidth = 0.6 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
 temperature = 300      # Kelvin
 
 # Electronic state numbers per atom
@@ -15,7 +15,7 @@ valence_GS_occupation = 10
 DoS_shapefile = './DoSdata.npy'
 #work_function = -5.15 # eV
 DoS_band_origin = -10 #eV
-DoS_band_dd_end = 3.15
+DoS_band_dd_end = 3. 
 
 ## Rates and cross sections
 
@@ -29,7 +29,7 @@ lambda_nonres = 190    # Absorption length of non-resonant photons, assumed equa
 E_f = 850.7 #eV
 
 
-N_j = 100          # Number of points E_j with which the valence system is resolved
+N_j = 70      # Number of points E_j with which the valence system is resolved
 Energy_axis_max = 600
 Energy_axis_fine_until = 20
 Energy_axis_min = -10
@@ -37,5 +37,5 @@ Energy_axis_min = -10
 ## Incident photon profile
 I0       = [3,]   # Pulse energy density in photons per nm²
 t0       = [0,]   # Arrival time on time-axis / fs
-tdur_sig = [4,]   # Rms pulse duration / fs
+tdur_sig = [13,]   # Rms pulse duration / fs
 E_i      = [858,] # Photon Energies of incident pulses / eV
