@@ -326,8 +326,9 @@ class FermiSolver:
             print('Too low of an energy demanded! Setting to min!')
             U = self.par.U_min
         if U > U_max:
-            print(f'Impossible Energy demanded: U={U:.1f}/{U_max:.1f}')
-
+            print(f'Impossible Energy demanded: U={U:.1f}/{U_max:.1f} - result will not be precise!!!')
+            U = U_max
+            
         sol0 = sc.optimize.root(self.loss_fcn, self.par0, args=(U, R), method='lm', options={'xtol': RTOL *RTOL, 'maxiter': 400})
         err0 = np.max(np.abs(sol0.fun))
         sol = sol0
