@@ -7,7 +7,7 @@ Energy_axis_max = 600
 Energy_axis_fine_until = 20
 Energy_axis_min = -10
 
-timestep_min = 0.5 #fs
+timestep_min = 0.7 #fs
 
 
 ## Sample data
@@ -16,12 +16,12 @@ atomic_density = 91.4  # atoms per nm³
 temperature = 300      # Kelvin
 
 # Electronic state numbers per atom
-core_states = 2
+core_states = 4
 valence_GS_occupation = 10
 
 ## Fermi Energy
 E_f = 850.7 #eV
-photon_bandwidth = 0.6 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
+photon_bandwidth = 0.3 # The energy span of the valence band that each resonant energy interacts with. Flat-top. / eV
 
 # DoS info
 DoS_shapefile = './DoSdata.npy'
@@ -29,9 +29,9 @@ DoS_band_origin = -10 #eV
 DoS_band_dd_end = 3. 
 
 ## Rates and cross sections
-tau_CH = 11.42        # Core hole lifetime / fs
-tau_th = 5            # Redistribution time of electrons in the VB / fs
-tau_free = 5         # Free electron lifetime
+tau_CH = 1.37          # Core hole lifetime / fs
+tau_th = 10             # Redistribution time of electrons in the VB / fs
+tau_free = 30           # Free electron lifetime
 lambda_nonres = 1e20   # Absorption length of non-resonant photons, assumed equal for all / nm
 
 ## Incident photon profile

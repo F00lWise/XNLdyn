@@ -27,7 +27,7 @@ class XNLpars:
         ## Some constants
         self.kB = 8.617333262145e-5  # Boltzmann Konstant / eV/K
         self.lightspeed = 299792458  # m/s
-        self.hbar = 6.582119569e-15  # eV s
+        self.hbar = 6.582119569e-16  # eV s
         self.echarge = 1.602176634e-19  # J/eV
 
         ## Here I just "package" the variables from the params file into class attributes
@@ -323,11 +323,13 @@ class FermiSolver:
     def solve(self, U, R):
         U_max = np.sum(self.par.m_j*self.par.E_j*R/self.par.M_VB)
         if U<self.par.U_min:
-            print('Too low of an energy demanded! Setting to min!')
-            U = self.par.U_min
+            print('Too low of an energy demanded! ')#Setting to min!
+            #U = self.par.U_min
+            #return 300*self.par.kB, 0
         if U > U_max:
             print(f'Impossible Energy demanded: U={U:.1f}/{U_max:.1f} - result will not be precise!!!')
             U = U_max
+            return np.inf, -1e3
             
         sol0 = sc.optimize.root(self.loss_fcn, self.par0, args=(U, R), method='lm', options={'xtol': RTOL *RTOL, 'maxiter': 400})
         err0 = np.max(np.abs(sol0.fun))
@@ -668,11 +670,7 @@ class XNLsim:
         if np.any(N_Ej_z<0):
             print('wait a second!')
         return N_Ej_z
-
-    ##########################################################
-    ### Main differential describing the time evolution of voxels
-    ##########################################################
-
+    
     def assert_positive_densities(self):
         ## Check for values that escape meaningful physics
         if np.any(self.state_vector<0):
@@ -680,8 +678,9 @@ class XNLsim:
                 warnings.warn('Some states tried to become significantly negative!')
             self.state_vector[self.state_vector<0] = 0
 
-
-        #Continure for otehr ..
+    ##########################################################
+    ### Main differential describing the time evolution of voxels
+    ##########################################################
     def time_derivative(self, t, state_vector_flat):
         if self.DEBUG: print('t: ', t)
 
@@ -884,8 +883,8 @@ class XNLsim:
 
         plt.sca(axes[2, 0])
         plt.title('Key populations at sample surface')
-        plt.plot(sol.t, sol.core[0] / self.par.M_core, c='red', label='Core holes')
-        plt.plot(sol.t, (sol.R_VB[0]) / self.par.M_VB, c='green', label='Total Valence')
+        plt.plot(sol.t, sol.core[0] / self.par.M_core, c='red', label='Core electrons')
+        plt.plot(sol.t, (sol.R_VB[0]) / self.par.M_VB, c='green', label='Total valence')
         cols = plt.cm.cool(np.linspace(0, 1, PAR.N_photens))
         for iE, E in enumerate(self.par.E_i):
             plt.plot(sol.t, sol.rho_j[0, PAR.resonant, :][iE].T / self.par.m_j[PAR.resonant][iE], c=cols[iE],
