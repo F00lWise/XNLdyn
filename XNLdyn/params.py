@@ -1,5 +1,5 @@
 # Axis information
-Nsteps_z = 20     # Steps in Z
+Nsteps_z = 40     # Steps in Z
 
 
 N_j = 70      # Number of points E_j with which the valence system is resolved
@@ -7,7 +7,7 @@ Energy_axis_max = 600
 Energy_axis_fine_until = 20
 Energy_axis_min = -10
 
-timestep_min = 0.7 #fs
+timestep_min = 0.25 #fs
 
 
 ## Sample data
@@ -30,8 +30,8 @@ DoS_band_dd_end = 3.
 
 ## Rates and cross sections
 tau_CH = 1.37          # Core hole lifetime / fs
-tau_th = 10             # Redistribution time of electrons in the VB / fs
-tau_free = 30           # Free electron lifetime
+tau_th = 5             # Redistribution time of electrons in the VB / fs
+tau_free = 15           # Free electron lifetime
 lambda_nonres = 1e20   # Absorption length of non-resonant photons, assumed equal for all / nm
 
 ## Incident photon profile
