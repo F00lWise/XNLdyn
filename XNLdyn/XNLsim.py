@@ -135,6 +135,8 @@ class XNLpars:
         # FEG solution starts where DFT DoS stops
         self.m_j[self.E_j>self.DoS_band_dd_end] = D_free(self.E_j - self.DoS_band_origin)[self.E_j>self.DoS_band_dd_end]* \
                                                   self.enax_dE_j[self.E_j>self.DoS_band_dd_end]
+        if np.any(self.m_j <=0) or np.any(np.isnan(self.m_j)):
+            raise ValueError('Cannot work with zero or negative state densities!')
 
         self.M_VB = np.sum(self.m_j)
 
