@@ -459,13 +459,11 @@ class XNLsim:
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
-        core_holes = (self.par.M_core - R_core)  # z
+        core_holes_share = (self.par.M_core - R_core)  # z
         R_VB = np.sum(rho_j, axis=1)
-        valence_resonant_occupation = rho_j / (self.par.m_j)  # rho_j_0 # z, j
-        valence_resonant_occupation_share = (valence_resonant_occupation.T / self.par.R_VB_0).T
-        valence_total_occupation_change = R_VB / self.par.R_VB_0
-        return (core_holes.T * valence_resonant_occupation_share.T * valence_total_occupation_change).T / self.par.tau_CH
-
+        valence_resonant_occupation_share = rho_j / self.par.R_VB_0  # rho_j_0 # z, j
+        valence_absolute_occupation_change = R_VB / self.par.R_VB_0
+        return (core_holes_share.T * valence_resonant_occupation_share.T * valence_absolute_occupation_change).T / self.par.tau_CH
     # Electron Thermalization
     def proc_el_therm(self, rho_j, r_j):
         el_therm = (r_j - rho_j) / self.par.tau_th
