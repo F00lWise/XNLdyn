@@ -643,7 +643,11 @@ class XNLsim:
             scattering[R_free<=0] = 0
         total_nonres = np.sum(nonres_inter * self.par.energy_differences, axis = (1,2))
 
-        ch_en_rate = np.sum(ch_decay * (self.par.E_f+self.par.E_j), axis = 1) #
+        #ch_en_rate = np.sum(ch_decay * (self.par.E_f+self.par.E_j), axis = 1) #
+        rho_j_new = self.state_vector[:, 3:]-ch_decay
+        average_new_valence_en = self.par.E_f+np.sum(rho_j_new*self.par.E_j,1)/np.sum(rho_j_new,1)
+        ch_en_rate = np.sum(ch_decay, axis = 1) * average_new_valence_en#
+
         result = total_nonres\
                + ch_en_rate\
                - scattering
