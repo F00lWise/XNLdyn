@@ -129,7 +129,7 @@ class XNLpars:
             return res
 
         # The following makes sure that the states m_j correspond to the integral of the states they represent, even if the DoS varies within the given energy interval 
-        f_DOS = sc.interpolate.interp1d(DoSdata['enax'],DoSdata['DoS'], kind = 'cubic')
+        f_DOS = sc.interpolate.interp1d(DoSdata['enax'],DoSdata['DoS'], kind = 'linear')
         def integrate_m(j, N_oversample = 30):
             low, high = self.enax_j_edges[j], self.enax_j_edges[j+1]
             if (low < np.min(DoSdata['enax'])) or (high > np.max(DoSdata['enax'])):
