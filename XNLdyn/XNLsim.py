@@ -481,7 +481,6 @@ class XNLsim:
         valence_resonant_occupation_share = rho_j / self.par.R_VB_0  # rho_j_0 # z, j
         valence_absolute_occupation_change = R_VB / self.par.R_VB_0
         return (core_holes_share.T * valence_resonant_occupation_share.T * valence_absolute_occupation_change).T / self.par.tau_CH
-
     # Electron Thermalization
     def proc_el_therm(self, rho_j, r_j):
         el_therm = (r_j - rho_j) / self.par.tau_th
