@@ -47,6 +47,11 @@ class XNLpars:
         #self.work_function = work_function
         self.DoS_band_origin = DoS_band_origin
         self.DoS_band_dd_end = DoS_band_dd_end
+        
+        self.Energy_axis_min = Energy_axis_min
+        self.Energy_axis_fine_until = Energy_axis_fine_until
+        self.Energy_axis_max = Energy_axis_max
+        
 
         ## Electronic state numbers per atom
         self.M_core = core_states
@@ -111,7 +116,7 @@ class XNLpars:
         # DoS_raw = np.interp(self.E_j, DoSdata['enax'][DoSdata['enax'] < Dos_constant_from],
         #                     DoSdata['DoS'][DoSdata['enax'] < Dos_constant_from])
         #
-        DoS_raw = np.interp(self.E_j, DoSdata['enax'], DoSdata['DoS'])
+        #DoS_raw = np.interp(self.E_j, DoSdata['enax'], DoSdata['DoS'])
         def D_free(eV):
             joule = eV * self.echarge
             me = 9.1093837e-31  # Kg
@@ -123,11 +128,21 @@ class XNLpars:
                 res = term1 * term2 * np.sqrt(joule) * self.echarge  # Return DoS in states per atom and eV
             res[eV <= 0] = 0
             return res
-        DoS_raw = DoS_raw #+  D_free(self.E_j - self.work_function)#
 
-        ## mj are normalized by the ground state population
+        # The following makes sure that the states m_j correspond to the integral of the states they represent, even if the DoS varies within the given energy interval 
+        f_DOS = sc.interpolate.interp1d(DoSdata['enax'],DoSdata['DoS'], kind = 'cubic')
+        def integrate_m(j, N_oversample = 30):
+            low, high = self.enax_j_edges[j], self.enax_j_edges[j+1]
+            if (low < np.min(DoSdata['enax'])) or (high > np.max(DoSdata['enax'])):
+                return np.nan
+            else:
+                return np.trapz(f_DOS(np.linspace(low, high+1e-6,30)), x= np.linspace(low, high+1e-6,30))
+        self.m_j = np.array([integrate_m(j) for j in range(self.N_j)])
+
         self.enax_dE_j = self.enax_j_edges[1:] - self.enax_j_edges[:-1]
-        self.m_j = DoS_raw * self.enax_dE_j  # scale with energy step size
+        #self.m_j = DoS_raw * self.enax_dE_j  # scale with energy step size
+        
+        ## mj are normalized by the ground state population
         mj_up_to_incl_0 = self.m_j[self.E_j<0]#np.concatenate((self.m_j[self.E_j<0],[np.interp(0, self.E_j,self.m_j)]))
         occupied = np.sum(mj_up_to_incl_0) / np.sum(self.m_j)  # part that is occupied in GS
         self.m_j = self.m_j / np.sum(self.m_j)  # normalize to one to be sure
@@ -135,6 +150,8 @@ class XNLpars:
         # FEG solution starts where DFT DoS stops
         self.m_j[self.E_j>self.DoS_band_dd_end] = D_free(self.E_j - self.DoS_band_origin)[self.E_j>self.DoS_band_dd_end]* \
                                                   self.enax_dE_j[self.E_j>self.DoS_band_dd_end]
+        if np.any(self.m_j <=0) or np.any(np.isnan(self.m_j)):
+            raise ValueError('Cannot work with zero or negative state densities!')
 
         self.M_VB = np.sum(self.m_j)
 
@@ -183,8 +200,7 @@ class XNLpars:
                                  * 1 / (np.sqrt(2 * np.pi) * self.tdur_sig[self.resonant])
         return result
 
-    def make_valence_energy_axis(self, N_j: int, min=Energy_axis_min, finemax=Energy_axis_fine_until,
-                                 max=Energy_axis_max, photon_bandwidth=photon_bandwidth):
+    def make_valence_energy_axis(self, N_j: int):
         """
             Creates an energy axis for the valence band, namely
                 self.E_j
@@ -193,12 +209,15 @@ class XNLpars:
             Energies are relative to the fermi-level. 3/4 of all points fall into the range (min, finemax)
             Makes sure that the energies E_i correspond to a point in E_j and
             drops the closest points to keep the number N_j.
-            :param N_j:
-            :param min:
-            :param finemax:
-            :param max:
             :return:
             """
+        # Unpack some values for frequent use
+        min     = self.Energy_axis_min
+        finemax = self.Energy_axis_fine_until
+        max     = self.Energy_axis_max
+        photon_bandwidth = self.photon_bandwidth
+                
+        
         N_j_fine = int(N_j * 3 / 4)
         N_j_coarse = int(N_j - N_j_fine)
 
@@ -457,12 +476,11 @@ class XNLsim:
 
     # Core-hole decay
     def proc_ch_decay(self, R_core, rho_j):
-        core_holes = (self.par.M_core - R_core)  # z
+        core_holes_share = (self.par.M_core - R_core)  # z
         R_VB = np.sum(rho_j, axis=1)
-        valence_resonant_occupation = rho_j / (self.par.m_j)  # rho_j_0 # z, j
-        valence_resonant_occupation_share = (valence_resonant_occupation.T / self.par.R_VB_0).T
-        valence_total_occupation_change = R_VB / self.par.R_VB_0
-        return (core_holes.T * valence_resonant_occupation_share.T * valence_total_occupation_change).T / self.par.tau_CH
+        valence_resonant_occupation_share = rho_j / self.par.R_VB_0  # rho_j_0 # z, j
+        valence_absolute_occupation_change = R_VB / self.par.R_VB_0
+        return (core_holes_share.T * valence_resonant_occupation_share.T * valence_absolute_occupation_change).T / self.par.tau_CH
 
     # Electron Thermalization
     def proc_el_therm(self, rho_j, r_j):

@@ -11,7 +11,8 @@ def run_modified_simulation(PAR, sim_options, changed_parameters, new_values, de
     assert len(changed_parameters)==len(new_values)
     for i, par in enumerate(changed_parameters):
         setattr(PAR, par, new_values[i])
-
+        
+    PAR.make_derived_params()
     # Update the simulation and calculate derived parameters
     sim = XNLdyn.XNLsim(PAR)
     sim.DEBUG = debug
