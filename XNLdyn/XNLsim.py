@@ -1,10 +1,9 @@
 import matplotlib.pyplot as plt
-import matplotlib as mpl
+#import matplotlib as mpl
 import scipy as sc
 from scipy.integrate import solve_ivp
 import numpy as np
 import warnings
-import lmfit
 
 # Import all the parameters defined in the params file and processed in process_params
 from .params import *
@@ -144,8 +143,8 @@ class XNLpars:
         
         ## mj are normalized by the ground state population
         mj_up_to_incl_0 = self.m_j[self.E_j<0]#np.concatenate((self.m_j[self.E_j<0],[np.interp(0, self.E_j,self.m_j)]))
-        occupied = np.sum(mj_up_to_incl_0) / np.sum(self.m_j)  # part that is occupied in GS
-        self.m_j = self.m_j / np.sum(self.m_j)  # normalize to one to be sure
+        occupied = np.sum(mj_up_to_incl_0) / np.nansum(self.m_j)  # part that is occupied in GS
+        self.m_j = self.m_j / np.nansum(self.m_j)  # normalize to one to be sure
         self.m_j *= valence_GS_occupation / occupied  # scale to ground state occupation
         # FEG solution starts where DFT DoS stops
         self.m_j[self.E_j>self.DoS_band_dd_end] = D_free(self.E_j - self.DoS_band_origin)[self.E_j>self.DoS_band_dd_end]* \
